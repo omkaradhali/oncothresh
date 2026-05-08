@@ -233,9 +233,6 @@ class ThresholdEvaluator:
         Builds the confusion matrix (tn, fp, fn, tp) and derives all metrics from
         those four counts. _safe_divide handles zero denominators on degenerate inputs
         (e.g. all-positive bootstrap resamples) without crashing.
-
-        See claude-brain/learnings/oncothresh-code-walkthrough.md for full metric
-        formulas and design rationale.
         """
         # Build 2x2 confusion matrix and unpack into tn/fp/fn/tp. labels=[0,1] forces
         # a full 2x2 even when a bootstrap resample accidentally contains only positives
