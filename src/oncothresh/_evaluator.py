@@ -190,33 +190,25 @@ class ThresholdEvaluator:
         """
         Evaluate at multiple clinical cutoffs and return a side-by-side report.
 
-        A model is often assessed at more than one threshold simultaneously. For TC scoring, 
-        the two standard cutoffs are 20% (NGS eligibility) and 50% (treatment response). 
-        This method runs evaluate() at each threshold and
-        bundles the results into a single MultiThresholdReport, so the caller gets everything
-        in one structured object instead of managing a list of results manually.
-
-        This method does no computation itself — all metric calculation happens inside
-        evaluate(), which calls _binarize() and _compute_metrics() in turn. The role of
-        this method is purely orchestration: loop, collect, and package.
+        Runs evaluate() at each threshold and bundles results into a single
+        MultiThresholdReport. Purely orchestration — no computation happens here.
+        For TC scoring the standard cutoffs are [0.20, 0.50] (NGS eligibility
+        and treatment response).
 
         Parameters
         ----------
         thresholds : list[float]
-            Ordered list of clinical cutoffs (e.g. [0.20, 0.50] for TC). Results are
-            returned in the same order as the thresholds provided.
+            Ordered list of clinical cutoffs. Results are returned in the same order.
 
         Returns
         -------
         MultiThresholdReport
-            Frozen Pydantic model containing one ThresholdResult per threshold, accessible
-            via .results (list of ThresholdResult) and .thresholds (list of float values).
+            One ThresholdResult per threshold, accessible via .results and .thresholds.
 
         Raises
         ------
         ValueError
-            If thresholds is an empty list. An empty list would silently produce a
-            MultiThresholdReport with no results, which is always a caller mistake.
+            If thresholds is an empty list.
         """
         if not thresholds:
             raise ValueError("thresholds must not be empty")
@@ -237,35 +229,13 @@ class ThresholdEvaluator:
         y_pred_bin: np.ndarray,
     ) -> ThresholdResult:
         """
-        Compute all classification metrics from pre-binarized arrays and return a ThresholdResult.
+        Core calculation step. Expects pre-binarized 0/1 arrays from _binarize().
+        Builds the confusion matrix (tn, fp, fn, tp) and derives all metrics from
+        those four counts. _safe_divide handles zero denominators on degenerate inputs
+        (e.g. all-positive bootstrap resamples) without crashing.
 
-        This is the core calculation step. It expects y_true_bin and y_pred_bin to already be
-        0/1 integer arrays (produced by _binarize). It builds the confusion matrix first —
-        giving tn, fp, fn, tp — then derives every metric from those four counts using
-        _safe_divide to handle zero denominators gracefully rather than crashing.
-
-        Metrics computed:
-          - sensitivity : tp / (tp + fn)  — of all true positives, how many did we catch?
-          - specificity : tn / (tn + fp)  — of all true negatives, how many did we rule out?
-          - ppv         : tp / (tp + fp)  — of all predicted positives, how many were correct?
-          - npv         : tn / (tn + fn)  — of all predicted negatives, how many were correct?
-          - f1          : harmonic mean of ppv and sensitivity
-          - mcc         : Matthews Correlation Coefficient — most robust metric for imbalanced classes
-          - accuracy    : (tp + tn) / total — fraction of all samples correctly classified
-
-        Parameters
-        ----------
-        threshold : float
-            The clinical cutoff value, stored on the result for traceability.
-        y_true_bin : np.ndarray
-            Ground-truth labels binarized at the threshold (0 or 1).
-        y_pred_bin : np.ndarray
-            Model prediction labels binarized at the threshold (0 or 1).
-
-        Returns
-        -------
-        ThresholdResult
-            Frozen Pydantic model containing all metrics and sample counts.
+        See claude-brain/learnings/oncothresh-code-walkthrough.md for full metric
+        formulas and design rationale.
         """
         # Build 2x2 confusion matrix and unpack into tn/fp/fn/tp. labels=[0,1] forces
         # a full 2x2 even when a bootstrap resample accidentally contains only positives
