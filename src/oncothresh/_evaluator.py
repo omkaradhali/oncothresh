@@ -15,12 +15,44 @@ class ThresholdEvaluator:
     """
     Evaluate a continuous oncology AI model at predefined clinical decision thresholds.
 
+    Most oncology AI models output a continuous score, a number between 0 and 1 representing
+    the model's confidence (e.g. predicted tumor cellularity, Ki-67 proliferation index, or
+    PD-L1 expression level). Standard ML metrics like accuracy are computed on binary labels,
+    not continuous scores. In clinical practice, a specific threshold converts that continuous
+    score into a binary decision: positive (at or above threshold) or negative (below threshold).
+
+    ThresholdEvaluator bridges that gap. You provide the ground-truth scores and model
+    predictions once at construction, then evaluate at any threshold or multiple thresholds
+    simultaneously to get the full suite of classification metrics relevant to clinical
+    decision making: sensitivity, specificity, PPV, NPV, F1, MCC, and accuracy.
+
+    Typical workflow::
+
+        ev = ThresholdEvaluator(y_true=pathologist_scores, y_pred=model_scores)
+
+        # Evaluate at a single clinical cutoff
+        result = ev.evaluate(threshold=0.20)
+
+        # Estimate how reliable that result is via bootstrapped confidence intervals
+        ci = ev.bootstrap_ci(threshold=0.20, n_bootstrap=1000, random_state=42)
+
+        # Compare performance side-by-side at multiple cutoffs
+        report = ev.multi_threshold_report(thresholds=[0.20, 0.50])
+
     Parameters
     ----------
     y_true : array-like of float
         Ground-truth continuous scores (e.g. pathologist TC scores, 0.0–1.0).
+        Must be a 1-D array or list with at least 2 samples.
     y_pred : array-like of float
-        Model-predicted continuous scores, same scale as y_true.
+        Model-predicted continuous scores on the same scale as y_true.
+        Must be the same length as y_true.
+
+    Raises
+    ------
+    ValueError
+        If y_true and y_pred have different shapes, are not 1-D, or contain fewer than
+        2 samples.
     """
 
     def __init__(
@@ -41,9 +73,6 @@ class ThresholdEvaluator:
         if len(self.y_true) < 2:
             raise ValueError("At least 2 samples are required")
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def evaluate(self, threshold: float) -> ThresholdResult:
         """
@@ -61,8 +90,13 @@ class ThresholdEvaluator:
         -------
         ThresholdResult
         """
+
+        # Classification metrics require binary labels; threshold converts continuous scores to 0/1.
         y_true_bin, y_pred_bin = self._binarize(threshold)
-        return self._compute_metrics(threshold, y_true_bin, y_pred_bin)
+
+        evaluation_result = self._compute_metrics(threshold, y_true_bin, y_pred_bin)
+
+        return evaluation_result
 
     def bootstrap_ci(
         self,
@@ -72,7 +106,26 @@ class ThresholdEvaluator:
         random_state: int | None = None,
     ) -> BootstrapResult:
         """
-        Estimate 95% confidence intervals for all metrics via non-parametric bootstrapping.
+        Estimate confidence intervals (CIs) for all metrics via non-parametric bootstrapping.
+
+        A confidence interval answers "how much can I trust this metric?" A single call to
+        evaluate() gives one number (e.g. sensitivity = 0.857), but that number came from one
+        specific dataset. Bootstrap CI estimates the realistic range that metric could fall in
+        if the dataset were slightly different.
+
+        How it works:
+          1. Draw n_bootstrap resamples from the dataset, each the same size as the original
+             but sampled with replacement (some patients appear multiple times, some not at all).
+          2. Compute all metrics on each resample, collecting n_bootstrap values per metric.
+          3. Sort those values and cut the extreme tails: for a 95% CI, discard the bottom
+             2.5% and top 2.5%, leaving the middle 95% as the interval [lower, upper].
+          4. Report the point estimate from the full original dataset alongside the interval.
+
+        Interpreting the result:
+          - Tight CI (e.g. 0.857, 95% CI: 0.831-0.881) → stable, reliable estimate.
+          - Wide CI  (e.g. 0.857, 95% CI: 0.42-0.99)   → dataset too small to trust the number.
+          - Reviewers and clinicians use the CI width to judge whether results are real or a
+            fluke of sample size. Always report CIs in publications.
 
         Parameters
         ----------
@@ -81,13 +134,15 @@ class ThresholdEvaluator:
         n_bootstrap : int
             Number of bootstrap resamples. 1000 is standard; use 2000 for publication.
         confidence : float
-            Confidence level, default 0.95 (95% CI).
+            Confidence level, default 0.95 (95% CI). Use 0.99 for a stricter 99% CI.
         random_state : int | None
-            Seed for reproducibility.
+            Seed for reproducibility. Set this to a fixed integer (e.g. 42) to get the
+            same CI bounds across runs — required for reproducible published results.
 
         Returns
         -------
         BootstrapResult
+            Point estimate and CI bounds for every metric at the given threshold.
         """
         rng = np.random.default_rng(random_state)
         n = len(self.y_true)
@@ -135,19 +190,39 @@ class ThresholdEvaluator:
         """
         Evaluate at multiple clinical cutoffs and return a side-by-side report.
 
+        A model is often assessed at more than one threshold simultaneously. For TC scoring, 
+        the two standard cutoffs are 20% (NGS eligibility) and 50% (treatment response). 
+        This method runs evaluate() at each threshold and
+        bundles the results into a single MultiThresholdReport, so the caller gets everything
+        in one structured object instead of managing a list of results manually.
+
+        This method does no computation itself — all metric calculation happens inside
+        evaluate(), which calls _binarize() and _compute_metrics() in turn. The role of
+        this method is purely orchestration: loop, collect, and package.
+
         Parameters
         ----------
         thresholds : list[float]
-            Ordered list of clinical cutoffs (e.g. [0.20, 0.50] for TC).
+            Ordered list of clinical cutoffs (e.g. [0.20, 0.50] for TC). Results are
+            returned in the same order as the thresholds provided.
+
+        Returns
+        -------
+        MultiThresholdReport
+            Frozen Pydantic model containing one ThresholdResult per threshold, accessible
+            via .results (list of ThresholdResult) and .thresholds (list of float values).
+
+        Raises
+        ------
+        ValueError
+            If thresholds is an empty list. An empty list would silently produce a
+            MultiThresholdReport with no results, which is always a caller mistake.
         """
         if not thresholds:
             raise ValueError("thresholds must not be empty")
         results = [self.evaluate(t) for t in thresholds]
         return MultiThresholdReport(results=results)
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
 
     def _binarize(self, threshold: float) -> tuple[np.ndarray, np.ndarray]:
         return (
@@ -161,6 +236,41 @@ class ThresholdEvaluator:
         y_true_bin: np.ndarray,
         y_pred_bin: np.ndarray,
     ) -> ThresholdResult:
+        """
+        Compute all classification metrics from pre-binarized arrays and return a ThresholdResult.
+
+        This is the core calculation step. It expects y_true_bin and y_pred_bin to already be
+        0/1 integer arrays (produced by _binarize). It builds the confusion matrix first —
+        giving tn, fp, fn, tp — then derives every metric from those four counts using
+        _safe_divide to handle zero denominators gracefully rather than crashing.
+
+        Metrics computed:
+          - sensitivity : tp / (tp + fn)  — of all true positives, how many did we catch?
+          - specificity : tn / (tn + fp)  — of all true negatives, how many did we rule out?
+          - ppv         : tp / (tp + fp)  — of all predicted positives, how many were correct?
+          - npv         : tn / (tn + fn)  — of all predicted negatives, how many were correct?
+          - f1          : harmonic mean of ppv and sensitivity
+          - mcc         : Matthews Correlation Coefficient — most robust metric for imbalanced classes
+          - accuracy    : (tp + tn) / total — fraction of all samples correctly classified
+
+        Parameters
+        ----------
+        threshold : float
+            The clinical cutoff value, stored on the result for traceability.
+        y_true_bin : np.ndarray
+            Ground-truth labels binarized at the threshold (0 or 1).
+        y_pred_bin : np.ndarray
+            Model prediction labels binarized at the threshold (0 or 1).
+
+        Returns
+        -------
+        ThresholdResult
+            Frozen Pydantic model containing all metrics and sample counts.
+        """
+        # Build 2x2 confusion matrix and unpack into tn/fp/fn/tp. labels=[0,1] forces
+        # a full 2x2 even when a bootstrap resample accidentally contains only positives
+        # or only negatives — without it sklearn returns a 1x1 and the unpacking crashes.
+        # Ref: https://scikit-learn.org/stable/modules/generated/sklearn.metrics.confusion_matrix.html
         tn, fp, fn, tp = confusion_matrix(y_true_bin, y_pred_bin, labels=[0, 1]).ravel()
 
         sensitivity = self._safe_divide(tp, tp + fn)
