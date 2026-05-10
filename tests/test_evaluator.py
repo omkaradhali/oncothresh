@@ -5,7 +5,12 @@ import pytest
 from pydantic import ValidationError
 
 from oncothresh import ThresholdEvaluator
-from oncothresh._results import BootstrapResult, MultiThresholdReport, ThresholdResult
+from oncothresh._results import (
+    BootstrapResult,
+    DecisionCurveResult,
+    MultiThresholdReport,
+    ThresholdResult,
+)
 
 
 # Fixtures
@@ -235,3 +240,126 @@ def test_multi_threshold_empty_raises():
     ev = _perfect_evaluator()
     with pytest.raises(ValueError, match="empty"):
         ev.multi_threshold_report(thresholds=[])
+
+
+# decision_curve()
+#
+# Known case used throughout:
+#   y_true = [0.8, 0.9, 0.1, 0.2]
+#   y_pred = [0.8, 0.9, 0.1, 0.2]  ← perfect model
+#
+# At pt=0.50:  y_true_bin=[1,1,0,0], y_pred_bin=[1,1,0,0]
+#   TP=2, FP=0, N=4, harm_weight=1.0, prevalence=0.5
+#   NB_model  = 2/4 - 0/4 * 1.0 = 0.50
+#   NB_all    = 0.5  - 0.5  * 1.0 = 0.00
+#
+# At pt=0.20:  y_true_bin=[1,1,0,1], y_pred_bin=[1,1,0,1]  (0.2 >= 0.2 is True)
+#   TP=3, FP=0, N=4, harm_weight=0.25, prevalence=0.75
+#   NB_model  = 3/4 - 0   = 0.75
+#   NB_all    = 0.75 - 0.25*0.25 = 0.6875
+
+def _dca_evaluator() -> ThresholdEvaluator:
+    """Perfect model on 4 samples — gives clean, hand-verifiable NB values."""
+    y = [0.8, 0.9, 0.1, 0.2]
+    return ThresholdEvaluator(y_true=y, y_pred=y)
+
+
+def _dca_evaluator_with_fp() -> ThresholdEvaluator:
+    """Model with one false positive at pt=0.50 (index 2: true=0.1, pred=0.6)."""
+    y_true = [0.8, 0.9, 0.1, 0.2]
+    y_pred = [0.8, 0.9, 0.6, 0.2]
+    return ThresholdEvaluator(y_true=y_true, y_pred=y_pred)
+
+
+def test_decision_curve_returns_correct_type():
+    result = _dca_evaluator().decision_curve(thresholds=[0.20, 0.50])
+    assert isinstance(result, DecisionCurveResult)
+
+
+def test_decision_curve_output_lengths_match():
+    """thresholds, nb_model, and nb_all must all have the same length."""
+    result = _dca_evaluator().decision_curve(thresholds=[0.20, 0.50, 0.80])
+    assert len(result.thresholds) == 3
+    assert len(result.net_benefit_model) == 3
+    assert len(result.net_benefit_all) == 3
+
+
+def test_decision_curve_default_thresholds_length():
+    """Default sweep is 99 points (np.linspace(0.01, 0.99, 99))."""
+    result = _dca_evaluator().decision_curve()
+    assert len(result.thresholds) == 99
+
+
+def test_decision_curve_nb_model_perfect_at_pt_050():
+    # Perfect model at pt=0.50: TP=2, FP=0, N=4, harm_weight=1.0 → NB=0.5
+    result = _dca_evaluator().decision_curve(thresholds=[0.50])
+    assert result.net_benefit_model[0] == pytest.approx(0.5, abs=1e-9)
+
+
+def test_decision_curve_nb_all_at_pt_050():
+    # Treat-all at pt=0.50: prevalence=0.5, harm_weight=1.0 → NB=0.0
+    result = _dca_evaluator().decision_curve(thresholds=[0.50])
+    assert result.net_benefit_all[0] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_decision_curve_nb_model_perfect_at_pt_020():
+    # Perfect model at pt=0.20: TP=3, FP=0, N=4, harm_weight=0.25 → NB=0.75
+    result = _dca_evaluator().decision_curve(thresholds=[0.20])
+    assert result.net_benefit_model[0] == pytest.approx(0.75, abs=1e-9)
+
+
+def test_decision_curve_nb_all_at_pt_020():
+    # Treat-all at pt=0.20: prevalence=0.75, harm_weight=0.25 → NB=0.75-0.25*0.25=0.6875
+    result = _dca_evaluator().decision_curve(thresholds=[0.20])
+    assert result.net_benefit_all[0] == pytest.approx(0.6875, abs=1e-9)
+
+
+def test_decision_curve_fp_reduces_nb_model():
+    # Adding a false positive at pt=0.50 reduces NB: TP=2, FP=1, N=4 → NB=0.5-0.25=0.25
+    result = _dca_evaluator_with_fp().decision_curve(thresholds=[0.50])
+    assert result.net_benefit_model[0] == pytest.approx(0.25, abs=1e-9)
+
+
+def test_decision_curve_nb_none_is_always_zero():
+    """net_benefit_none is a convenience property that always returns zeros."""
+    result = _dca_evaluator().decision_curve(thresholds=[0.20, 0.50, 0.80])
+    assert result.net_benefit_none == [0.0, 0.0, 0.0]
+
+
+def test_decision_curve_nb_all_can_be_negative():
+    """
+    At high pt where prevalence is low, treat-all NB goes negative.
+    This is correct — do not clip. A negative NB means the strategy causes net harm.
+
+    y_true = [0.1, 0.2, 0.3, 0.4], all below 0.50 → prevalence=0 at pt=0.50.
+    NB_all = 0 - 1.0 * 1.0 = -1.0
+    """
+    ev = ThresholdEvaluator(y_true=[0.1, 0.2, 0.3, 0.4], y_pred=[0.1, 0.2, 0.3, 0.4])
+    result = ev.decision_curve(thresholds=[0.50])
+    assert result.net_benefit_all[0] == pytest.approx(-1.0, abs=1e-9)
+
+
+def test_decision_curve_pt_at_or_above_one_returns_nan():
+    """pt >= 1.0 makes pt/(1-pt) undefined — must return NaN, not crash."""
+    result = _dca_evaluator().decision_curve(thresholds=[0.50, 1.0])
+    assert not np.isnan(result.net_benefit_model[0])
+    assert np.isnan(result.net_benefit_model[1])
+    assert np.isnan(result.net_benefit_all[1])
+
+
+def test_decision_curve_perfect_model_beats_treat_all():
+    """A perfect model should have higher NB than treat-all at clinical thresholds."""
+    result = _dca_evaluator().decision_curve(thresholds=[0.20, 0.50])
+    for nb_m, nb_a in zip(result.net_benefit_model, result.net_benefit_all, strict=True):
+        assert nb_m >= nb_a
+
+
+def test_decision_curve_result_is_frozen():
+    result = _dca_evaluator().decision_curve(thresholds=[0.50])
+    with pytest.raises(ValidationError):
+        result.thresholds = [0.99]  # type: ignore[misc]
+
+
+def test_decision_curve_str_contains_n_points():
+    result = _dca_evaluator().decision_curve(thresholds=[0.20, 0.50])
+    assert "n_points=2" in str(result)

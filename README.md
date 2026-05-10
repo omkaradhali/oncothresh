@@ -29,6 +29,31 @@ print(ci.sensitivity)  # 0.923 (95% CI: 0.871–0.962)
 report = ev.multi_threshold_report(thresholds=[0.20, 0.50])
 ```
 
+## Decision Curve Analysis
+
+`decision_curve()` computes net benefit across a sweep of threshold probabilities,
+answering whether using the model to guide clinical decisions is better than
+treating everyone or no one.
+
+```python
+import numpy as np
+
+result = ev.decision_curve(thresholds=np.linspace(0.05, 0.50, 46))
+
+# result.thresholds         — the pt values swept
+# result.net_benefit_model  — net benefit of the model at each pt
+# result.net_benefit_all    — net benefit of treating everyone at each pt
+# result.net_benefit_none   — always 0.0 (treat nobody)
+```
+
+The model adds clinical value wherever `net_benefit_model` exceeds both
+`net_benefit_all` and zero.
+
+**Coming from R?** The equivalent in R is `dcurves::dca()` from the
+[dcurves](https://cran.r-project.org/package=dcurves) package (Sjoberg et al.).
+`oncothresh` produces the same net benefit curves; the interface follows
+Python/sklearn conventions rather than R's tidy data frame style.
+
 ## Clinical Thresholds Reference
 
 | Biomarker | Threshold | Clinical Decision |

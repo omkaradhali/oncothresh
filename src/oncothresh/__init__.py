@@ -21,6 +21,7 @@ from oncothresh._evaluator import ThresholdEvaluator
 from oncothresh._results import (
     BootstrapResult,
     ConfidenceInterval,
+    DecisionCurveResult,
     MultiThresholdReport,
     ThresholdResult,
 )
@@ -32,4 +33,5 @@ __all__ = [
     "BootstrapResult",
     "ConfidenceInterval",
     "MultiThresholdReport",
+    "DecisionCurveResult",
 ]

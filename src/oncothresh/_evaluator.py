@@ -6,6 +6,7 @@ from sklearn.metrics import confusion_matrix, matthews_corrcoef
 from oncothresh._results import (
     BootstrapResult,
     ConfidenceInterval,
+    DecisionCurveResult,
     MultiThresholdReport,
     ThresholdResult,
 )
@@ -215,6 +216,113 @@ class ThresholdEvaluator:
         results = [self.evaluate(t) for t in thresholds]
         return MultiThresholdReport(results=results)
 
+
+    def decision_curve(
+        self,
+        thresholds: np.ndarray | list[float] | None = None,
+    ) -> DecisionCurveResult:
+        """
+        Compute Decision Curve Analysis (DCA) across a range of clinical decision thresholds.
+
+        Why DCA? Standard metrics (sensitivity, specificity, AUC) measure discrimination —
+        how well the model separates positives from negatives. They cannot answer: "Is using
+        this model to guide clinical decisions actually better than a simpler policy?" DCA
+        answers that question by computing net benefit at every possible harm trade-off.
+
+        The key concept is the threshold probability ``pt``: the probability of disease at
+        which a clinician would decide to intervene. A clinician who says "I'll order NGS
+        if there's a ≥20% chance the patient's TC is ≥20%" has pt=0.20. Their implicit
+        harm ratio is pt/(1-pt) = 0.25: they consider 4 unnecessary procedures equivalent
+        to 1 missed case.
+
+        At each pt, three strategies are compared::
+
+            Model:      NB = TP/N - FP/N x pt/(1-pt)
+            Treat all:  NB = prevalence - (1-prevalence) x pt/(1-pt)
+            Treat none: NB = 0  (no interventions → no harm, no benefit)
+
+        The model adds clinical value wherever its net benefit exceeds both treat-all and
+        zero. Negative net benefit means the strategy causes net harm — this is valid and
+        should not be clipped.
+
+        Interpreting the curves:
+
+        - Find your ``pt`` on the x-axis (where your clinical harm tolerance sits).
+        - If ``net_benefit_model > net_benefit_all`` at that pt → model beats "treat everyone".
+        - If ``net_benefit_model > 0`` at that pt → model beats "treat nobody".
+        - The width of the pt range where the model wins is the clinical utility window.
+
+        Parameters
+        ----------
+        thresholds : array-like of float or None
+            The pt values to sweep. Each value must be in [0, 1); pt=1.0 is excluded
+            because pt/(1-pt) is undefined there (any model with FPs would have NB=−∞).
+            Values outside [0, 1) produce NaN entries in the output.
+
+            For TC analysis the range [0.05, 0.50] covers both clinical cutoffs (0.20
+            and 0.50) with context on either side. Defaults to np.linspace(0.01, 0.99, 99)
+            when not provided.
+
+        Returns
+        -------
+        DecisionCurveResult
+            ``thresholds``, ``net_benefit_model``, and ``net_benefit_all`` arrays of equal
+            length. Access ``net_benefit_none`` (always 0) via the result's property.
+
+        References
+        ----------
+        Vickers AJ, Elkin EB. Decision curve analysis: a novel method for evaluating
+        prediction models. Med Decis Making. 2006;26(6):565-574.
+        """
+        if thresholds is None:
+            # 99 evenly-spaced points from 1% to 99% — fine-grained enough for smooth plots,
+            # excludes 0 (trivial: everyone is positive) and 1 (undefined: pt/(1−pt) → ∞).
+            thresholds = np.linspace(0.01, 0.99, 99)
+
+        pts = np.asarray(thresholds, dtype=float)
+        n = len(self.y_true)
+
+        nb_model: list[float] = []
+        nb_all: list[float] = []
+
+        for pt in pts:
+            # pt/(1−pt) → ∞ at pt≥1.0: NB collapses to −∞ for any model with FPs.
+            # Return NaN so callers can detect and skip these points when plotting.
+            if pt >= 1.0:
+                nb_model.append(float("nan"))
+                nb_all.append(float("nan"))
+                continue
+
+            # Binarize at this threshold — mirrors evaluate(): >= is "positive".
+            y_true_bin = self.y_true >= pt
+            y_pred_bin = self.y_pred >= pt
+
+            # TP: model says positive AND truly positive.
+            # FP: model says positive BUT truly negative.
+            tp = int(np.sum(y_pred_bin & y_true_bin))
+            fp = int(np.sum(y_pred_bin & ~y_true_bin))
+
+            # harm_weight converts FPs to the same "currency" as TPs.
+            # pt=0.20 → harm_weight=0.25: 4 unnecessary procedures ≈ 1 missed case.
+            # pt=0.50 → harm_weight=1.00: FP and FN are equally harmful.
+            harm_weight = pt / (1.0 - pt)
+
+            # Net benefit for the model: TPs rewarded, FPs penalised by harm_weight.
+            nb_model.append(tp / n - fp / n * harm_weight)
+
+            # Prevalence at this specific pt: fraction of y_true scored >= pt.
+            # Recomputed per pt because more patients are "positive" at lower cutoffs.
+            prevalence = float(y_true_bin.mean())
+
+            # Net benefit for treat-all: derived from the same formula with TP=all positives,
+            # FP=all negatives. Rearranges neatly to: prevalence − (1−prevalence) × harm_weight.
+            nb_all.append(prevalence - (1.0 - prevalence) * harm_weight)
+
+        return DecisionCurveResult(
+            thresholds=pts.tolist(),
+            net_benefit_model=nb_model,
+            net_benefit_all=nb_all,
+        )
 
     def _binarize(self, threshold: float) -> tuple[np.ndarray, np.ndarray]:
         return (

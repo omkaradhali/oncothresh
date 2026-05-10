@@ -149,3 +149,58 @@ class MultiThresholdReport(BaseModel):
     @property
     def thresholds(self) -> list[float]:
         return [r.threshold for r in self.results]
+
+
+class DecisionCurveResult(BaseModel):
+    """
+    Net benefit curves from Decision Curve Analysis (DCA) across a sweep of threshold
+    probabilities.
+
+    DCA compares three strategies at each threshold probability ``pt``:
+
+    - **Model**: use the model's predicted scores to decide who to treat.
+    - **Treat all**: treat every patient regardless of model output.
+    - **Treat none**: treat nobody (net benefit = 0 by definition).
+
+    The model adds clinical value wherever ``net_benefit_model`` exceeds both
+    ``net_benefit_all`` and zero.
+
+    ``net_benefit_none`` is not stored because it is always 0 — access it via the
+    ``net_benefit_none`` property, which returns a list of zeros the same length as
+    ``thresholds``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    thresholds: list[float] = Field(
+        description=(
+            "The threshold probability (pt) values that were swept. Each pt is the "
+            "probability of disease at which a clinician would decide to intervene."
+        )
+    )
+    net_benefit_model: list[float] = Field(
+        description=(
+            "Net benefit of the model at each threshold probability. "
+            "Computed as TP/N − FP/N × pt/(1−pt). May be negative, indicating net harm."
+        )
+    )
+    net_benefit_all: list[float] = Field(
+        description=(
+            "Net benefit of treating every patient at each threshold probability. "
+            "Computed as prevalence − (1−prevalence) × pt/(1−pt). "
+            "This is the baseline the model must beat to be clinically useful."
+        )
+    )
+
+    @property
+    def net_benefit_none(self) -> list[float]:
+        """Net benefit of treating nobody — always 0.0 at every threshold."""
+        return [0.0] * len(self.thresholds)
+
+    def __str__(self) -> str:
+        n = len(self.thresholds)
+        lo, hi = self.thresholds[0], self.thresholds[-1]
+        return (
+            f"DecisionCurveResult(thresholds=[{lo:.2f}–{hi:.2f}], "
+            f"n_points={n}, net_benefit_none=0.0)"
+        )
