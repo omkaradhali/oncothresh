@@ -42,7 +42,7 @@ class ThresholdEvaluator:
     Parameters
     ----------
     y_true : array-like of float
-        Ground-truth continuous scores (e.g. pathologist TC scores, 0.0–1.0).
+        Ground-truth continuous scores (e.g. pathologist TC scores, 0.0-1.0).
         Must be a 1-D array or list with at least 2 samples.
     y_pred : array-like of float
         Model-predicted continuous scores on the same scale as y_true.

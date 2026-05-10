@@ -7,11 +7,8 @@ from pydantic import ValidationError
 from oncothresh import ThresholdEvaluator
 from oncothresh._results import BootstrapResult, MultiThresholdReport, ThresholdResult
 
-# ---------------------------------------------------------------------------
+
 # Fixtures
-# ---------------------------------------------------------------------------
-
-
 def _perfect_evaluator(n: int = 100, threshold: float = 0.20) -> ThresholdEvaluator:
     """Model that perfectly replicates ground truth."""
     rng = np.random.default_rng(0)
@@ -33,11 +30,7 @@ def _known_evaluator() -> ThresholdEvaluator:
     return ThresholdEvaluator(y_true=y_true, y_pred=y_pred)
 
 
-# ---------------------------------------------------------------------------
 # Constructor validation
-# ---------------------------------------------------------------------------
-
-
 def test_shape_mismatch_raises():
     with pytest.raises(ValueError, match="same shape"):
         ThresholdEvaluator(y_true=[0.1, 0.2], y_pred=[0.1])
@@ -59,11 +52,7 @@ def test_list_inputs_converted_to_ndarray():
     assert isinstance(ev.y_pred, np.ndarray)
 
 
-# ---------------------------------------------------------------------------
 # evaluate() — perfect model
-# ---------------------------------------------------------------------------
-
-
 def test_perfect_model_sensitivity_and_specificity():
     ev = _perfect_evaluator()
     result = ev.evaluate(threshold=0.20)
@@ -84,11 +73,7 @@ def test_perfect_model_accuracy():
     assert result.accuracy == pytest.approx(1.0)
 
 
-# ---------------------------------------------------------------------------
 # evaluate() — known case
-# ---------------------------------------------------------------------------
-
-
 def test_known_case_sensitivity():
     # TP=2, FN=1 → sensitivity=2/3
     result = _known_evaluator().evaluate(threshold=0.5)
@@ -137,11 +122,7 @@ def test_result_str_contains_threshold():
     assert "0.50" in str(result)
 
 
-# ---------------------------------------------------------------------------
 # evaluate() — edge cases
-# ---------------------------------------------------------------------------
-
-
 def test_all_predicted_negative_sensitivity_is_zero():
     """Model always predicts 0 — sensitivity must be 0, specificity 1."""
     y_true = [0.1, 0.9, 0.8, 0.2]
@@ -181,11 +162,7 @@ def test_result_type():
     assert isinstance(result, ThresholdResult)
 
 
-# ---------------------------------------------------------------------------
 # bootstrap_ci()
-# ---------------------------------------------------------------------------
-
-
 def test_bootstrap_result_type():
     ev = _perfect_evaluator()
     ci = ev.bootstrap_ci(threshold=0.20, n_bootstrap=50, random_state=42)
@@ -235,11 +212,7 @@ def test_bootstrap_ci_str():
     assert "95% CI" in s
 
 
-# ---------------------------------------------------------------------------
 # multi_threshold_report()
-# ---------------------------------------------------------------------------
-
-
 def test_multi_threshold_report_returns_correct_type():
     ev = _perfect_evaluator()
     report = ev.multi_threshold_report(thresholds=[0.20, 0.50])
