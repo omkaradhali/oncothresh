@@ -20,10 +20,13 @@ Quick start::
 from oncothresh._evaluator import ThresholdEvaluator
 from oncothresh._results import (
     BootstrapResult,
+    BoundaryCalibrationResult,
     ConfidenceInterval,
     DecisionCurveResult,
     MultiThresholdReport,
+    NNTResult,
     ThresholdResult,
+    ThresholdSensitivityResult,
 )
 
 __version__ = "0.1.0"
@@ -34,4 +37,7 @@ __all__ = [
     "ConfidenceInterval",
     "MultiThresholdReport",
     "DecisionCurveResult",
+    "NNTResult",
+    "ThresholdSensitivityResult",
+    "BoundaryCalibrationResult",
 ]

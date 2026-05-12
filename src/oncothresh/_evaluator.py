@@ -5,10 +5,13 @@ from sklearn.metrics import confusion_matrix, matthews_corrcoef
 
 from oncothresh._results import (
     BootstrapResult,
+    BoundaryCalibrationResult,
     ConfidenceInterval,
     DecisionCurveResult,
     MultiThresholdReport,
+    NNTResult,
     ThresholdResult,
+    ThresholdSensitivityResult,
 )
 
 
@@ -216,6 +219,337 @@ class ThresholdEvaluator:
         results = [self.evaluate(t) for t in thresholds]
         return MultiThresholdReport(results=results)
 
+
+    def nnt(self, threshold: float) -> NNTResult:
+        """
+        Compute the Number Needed to Test (NNT) at a clinical decision threshold.
+
+        NNT answers the question clinicians ask in practice: "Given the model's behaviour
+        at this threshold, how many patients do I need to act on to find one true case —
+        and how many cleared patients might be hiding a missed case?"
+
+        Two values are returned:
+
+        **nnt_positive** — efficiency of a positive call
+            Derived from PPV (positive predictive value).
+            Formula: 1 / PPV
+            Interpretation: on average, ``nnt_positive`` model-positive patients need to
+            be tested before one true positive is found. A value of 2.0 means every
+            second flagged patient is a true case; a value of 10.0 means 9 out of 10
+            flagged patients are unnecessary referrals.
+
+        **nnt_negative** — safety of a negative call
+            Derived from NPV (negative predictive value).
+            Formula: 1 / (1 - NPV)
+            Interpretation: on average, ``nnt_negative`` model-negative patients are
+            cleared before one missed true positive is encountered. A value of 100 means
+            1 in 100 cleared patients is actually a missed case — low risk. A value of 5
+            means 1 in 5 clearances conceals a true positive — high risk.
+
+        Infinite values are valid and carry clinical meaning:
+            - ``nnt_positive = inf`` when PPV = 0: the model never flags a true positive,
+              so no amount of testing will find one via this model.
+            - ``nnt_negative = inf`` when NPV = 1: the model never misses a true positive,
+              so there are no missed cases among cleared patients.
+
+        This method calls ``evaluate()`` internally — no extra computation is performed
+        beyond what ``evaluate()`` already does.
+
+        Parameters
+        ----------
+        threshold : float
+            Clinical cutoff value (e.g. 0.20 for 20% TC NGS eligibility threshold).
+
+        Returns
+        -------
+        NNTResult
+            Contains nnt_positive, nnt_negative, and the underlying PPV/NPV values that
+            produced them, along with sample counts for context.
+
+        Examples
+        --------
+        >>> ev = ThresholdEvaluator(y_true=[0.1, 0.3, 0.6, 0.8], y_pred=[0.1, 0.25, 0.55, 0.85])
+        >>> result = ev.nnt(threshold=0.20)
+        >>> print(result.nnt_positive)  # how many flags per true positive
+        >>> print(result.nnt_negative)  # how many clearances per missed case
+        """
+        result = self.evaluate(threshold)
+
+        # PPV = 0 means every flag is a false alarm: 1/0 is mathematically undefined,
+        # but the clinical interpretation is clear — you will never find a true positive
+        # by acting on this model's positive calls. inf is the correct answer.
+        nnt_positive = (1.0 / result.ppv) if result.ppv > 0 else float("inf")
+
+        # 1 − NPV is the rate of missed cases among cleared patients.
+        # NPV = 1 means no cleared patient is a missed case: 1/(1−1) = 1/0 → inf,
+        # meaning you could clear infinitely many patients without missing a single true positive.
+        false_omission_rate = 1.0 - result.npv
+        nnt_negative = (1.0 / false_omission_rate) if false_omission_rate > 0 else float("inf")
+
+        return NNTResult(
+            threshold=threshold,
+            nnt_positive=nnt_positive,
+            nnt_negative=nnt_negative,
+            ppv=result.ppv,
+            npv=result.npv,
+            n_positive=result.n_positive,
+            n_negative=result.n_negative,
+            n_total=result.n_total,
+        )
+
+    def threshold_sensitivity(
+        self,
+        threshold: float,
+        delta: float = 0.05,
+        step: float = 0.01,
+    ) -> ThresholdSensitivityResult:
+        """
+        Analyse how sensitivity and specificity change as the clinical threshold shifts.
+
+        A brief note on naming: "threshold sensitivity analysis" is a term from statistics
+        and engineering meaning "how sensitive is this result to a change in the threshold
+        parameter?" It does not refer to clinical sensitivity (the true positive rate).
+        Both meanings appear here — the method name describes the analysis technique,
+        while the ``sensitivities`` field in the result holds the clinical metric.
+
+        What this method does:
+            Sweeps the decision threshold across [threshold - delta, threshold + delta],
+            computes clinical sensitivity and specificity at each point, and returns the
+            full curves. The range is clamped to [0, 1] because scores outside that range
+            are not clinically meaningful.
+
+        Why this matters clinically:
+            A published threshold (e.g. 20% TC for NGS eligibility) is almost never used
+            verbatim across all labs. Staining protocols differ, scanners differ, and
+            pathologist conventions drift. A threshold sensitivity analysis answers: "If
+            our lab uses 18% instead of 20%, how much does the model's sensitivity change?
+            Are we putting patients at risk?"
+
+            If the curves are steep near the nominal threshold, the model is fragile — it
+            was tuned specifically to that cutoff and will not transfer safely. If the
+            curves are flat, the model is robust across reasonable clinical variation.
+
+            Typical interpretation for TC scoring:
+                - ≤3% sensitivity drop over ±5% shift: robust, safe to deploy
+                - 5-10% drop: moderate fragility, document the exact cutoff used
+                - >10% drop: the model is threshold-brittle — report results across
+                  a range of thresholds rather than a single point
+
+        Parameters
+        ----------
+        threshold : float
+            The nominal clinical cutoff to analyse (e.g. 0.20 for 20% TC).
+        delta : float
+            Half-width of the sweep. The analysis covers
+            [threshold - delta, threshold + delta], clamped to [0, 1].
+            Default 0.05 covers ±5%, which spans the typical lab-to-lab variation
+            for TC thresholds.
+        step : float
+            Resolution of the sweep — distance between consecutive threshold values.
+            Default 0.01 (1%) gives 11 evaluation points over the default ±5% range,
+            which is granular enough for plotting and clinical reporting.
+            Use 0.005 (0.5%) for publication-quality figures.
+
+        Returns
+        -------
+        ThresholdSensitivityResult
+            Three parallel arrays (``thresholds``, ``sensitivities``, ``specificities``)
+            plus ``shifts`` (signed distance from the nominal cutoff) and
+            ``nominal_index`` (which array position corresponds to the reference threshold).
+
+        Raises
+        ------
+        ValueError
+            If delta <= 0 or step <= 0.
+        """
+        if delta <= 0:
+            raise ValueError(f"delta must be positive, got {delta}")
+        if step <= 0:
+            raise ValueError(f"step must be positive, got {step}")
+
+        # Build the sweep grid using linspace rather than arange to avoid floating-point
+        # drift. arange with a float step accumulates rounding error over many steps
+        # (e.g. 0.01 + 0.01 + ... != exact multiples). linspace guarantees the exact
+        # number of points and places them uniformly regardless of float representation.
+        n_steps = int(round(2 * delta / step)) + 1
+        lo = max(0.0, threshold - delta)
+        hi = min(1.0, threshold + delta)
+        pts = np.linspace(lo, hi, n_steps)
+
+        sensitivities: list[float] = []
+        specificities: list[float] = []
+
+        for pt in pts:
+            r = self.evaluate(pt)
+            sensitivities.append(r.sensitivity)
+            specificities.append(r.specificity)
+
+        # shifts[i] = how far pts[i] is from the nominal threshold.
+        # Round to 10 decimal places to suppress floating-point noise in the display
+        # (e.g. 0.19999999999998 instead of 0.20 after linspace arithmetic).
+        shifts = [round(float(pt) - threshold, 10) for pt in pts]
+
+        # Identify which index in the sweep corresponds to the nominal threshold.
+        # We find the closest point rather than assuming an exact match, because clamping
+        # and linspace rounding may shift the nominal value slightly from its ideal position.
+        nominal_index = int(np.argmin(np.abs(pts - threshold)))
+
+        return ThresholdSensitivityResult(
+            nominal_threshold=threshold,
+            delta=delta,
+            thresholds=[round(float(pt), 10) for pt in pts],
+            shifts=shifts,
+            sensitivities=sensitivities,
+            specificities=specificities,
+            nominal_index=nominal_index,
+        )
+
+    def boundary_calibration(
+        self,
+        threshold: float,
+        window: float = 0.10,
+        n_bins: int = 10,
+    ) -> BoundaryCalibrationResult:
+        """
+        Compute boundary-weighted calibration error near a clinical decision threshold.
+
+        Global calibration metrics (e.g. overall ECE across all predictions) can mask the
+        most clinically dangerous miscalibration. A model that is well-calibrated on average
+        may still be systematically biased near the exact cutoff that determines whether a
+        patient receives NGS testing, chemotherapy, or an immunotherapy agent.
+
+        This method focuses exclusively on the *boundary zone* — predictions that fall
+        within ``window`` of ``threshold``. Those are the close-call samples where a
+        calibration error most directly changes a treatment decision.
+
+        How calibration is measured for a regression model:
+            Regression calibration asks: "when the model predicts a score of X, is the
+            true value actually around X?" This is different from binary classifier
+            calibration (where you check whether P̂(positive) matches the observed
+            positive rate). Here, both y_pred and y_true are continuous scores and we
+            check their agreement within the boundary zone by binning.
+
+        Algorithm:
+            1. Select boundary samples: keep only samples where y_pred ∈ [threshold ± window].
+            2. Divide the boundary zone into ``n_bins`` equal-width bins.
+            3. For each bin, compute mean(y_pred) and mean(y_true).
+            4. ECE = Σ (n_bin / N_boundary) x |mean_pred_bin - mean_true_bin|
+               Empty bins are skipped (contribute 0 weight to ECE).
+
+        Choosing ``window``:
+            The window should span the clinical uncertainty range — the zone where a
+            real prediction could plausibly be on either side of the threshold.
+            - TC 20% threshold: window=0.10 captures predictions from 10% to 30%, which
+              includes cases a pathologist might read as borderline.
+            - Tighter window (0.05): focuses on the sharpest close-calls; requires more
+              data to populate bins reliably.
+            - Wider window (0.15): more samples, smoother bins, but includes predictions
+              that are not truly on the boundary.
+
+        Choosing ``n_bins``:
+            Fewer bins (5) are more stable with small datasets — each bin has more samples,
+            so mean values are reliable. More bins (10-20) give a finer-grained reliability
+            diagram but need proportionally more boundary samples to avoid empty bins.
+            Rule of thumb: aim for at least 5 samples per bin on average
+            (n_samples / n_bins ≥ 5).
+
+        Parameters
+        ----------
+        threshold : float
+            The clinical decision cutoff (e.g. 0.20 for 20% TC).
+        window : float
+            Half-width of the boundary zone. Samples with y_pred in
+            [threshold - window, threshold + window] are included.
+            Clamped to [0, 1]. Default 0.10 (±10%).
+        n_bins : int
+            Number of equal-width bins within the boundary zone.
+            Default 10. Use fewer bins (5) for small datasets.
+
+        Returns
+        -------
+        BoundaryCalibrationResult
+            Contains the scalar ``ece``, bin-level calibration data
+            (``bin_mean_predicted``, ``bin_mean_actual``, ``bin_counts``), and metadata.
+            When ``n_samples == 0``, ``ece`` is ``float("nan")`` and bin value arrays
+            contain only ``float("nan")`` entries.
+
+        Raises
+        ------
+        ValueError
+            If window <= 0 or n_bins < 1.
+        """
+        if window <= 0:
+            raise ValueError(f"window must be positive, got {window}")
+        if n_bins < 1:
+            raise ValueError(f"n_bins must be at least 1, got {n_bins}")
+
+        # Boundary zone: clamp to [0, 1] since scores live in that range.
+        lo = max(0.0, threshold - window)
+        hi = min(1.0, threshold + window)
+
+        # Select only predictions that fall in the boundary zone.
+        # We use the predicted score (y_pred) as the filter criterion — not y_true —
+        # because the model's decision is based on what it predicts, not the true label.
+        # A sample with y_true=0.35 but y_pred=0.45 is not a boundary case for the
+        # 20% threshold; the model confidently called it positive.
+        boundary_mask = (self.y_pred >= lo) & (self.y_pred <= hi)
+        n_boundary = int(boundary_mask.sum())
+
+        # Bin grid: n_bins equal-width bins spanning the full boundary zone.
+        # Using linspace avoids the floating-point accumulation that plagues np.arange
+        # with float steps (see threshold_sensitivity for the same rationale).
+        edges = np.linspace(lo, hi, n_bins + 1)
+        centers = [(edges[i] + edges[i + 1]) / 2.0 for i in range(n_bins)]
+
+        y_pred_b = self.y_pred[boundary_mask]
+        y_true_b = self.y_true[boundary_mask]
+
+        bin_mean_pred: list[float] = []
+        bin_mean_true: list[float] = []
+        bin_counts: list[int] = []
+
+        for i in range(n_bins):
+            # Half-open [lo, hi) for all bins except the last, which is [lo, hi] to ensure
+            # samples exactly at the upper edge are not excluded.
+            if i < n_bins - 1:
+                in_bin = (y_pred_b >= edges[i]) & (y_pred_b < edges[i + 1])
+            else:
+                in_bin = (y_pred_b >= edges[i]) & (y_pred_b <= edges[i + 1])
+
+            count = int(in_bin.sum())
+            bin_counts.append(count)
+
+            if count > 0:
+                bin_mean_pred.append(float(y_pred_b[in_bin].mean()))
+                bin_mean_true.append(float(y_true_b[in_bin].mean()))
+            else:
+                # Empty bins contribute nothing to ECE; store nan so callers can
+                # distinguish "empty bin" from "perfectly calibrated bin" in plots.
+                bin_mean_pred.append(float("nan"))
+                bin_mean_true.append(float("nan"))
+
+        # Compute ECE: weighted average of |mean_pred - mean_true| across non-empty bins.
+        if n_boundary == 0:
+            # No predictions fell near this threshold — ECE is undefined, not zero.
+            ece = float("nan")
+        else:
+            ece = sum(
+                (count / n_boundary) * abs(mp - mt)
+                for count, mp, mt in zip(bin_counts, bin_mean_pred, bin_mean_true, strict=True)
+                if count > 0  # empty bins have nan values; skip rather than propagate nan
+            )
+
+        return BoundaryCalibrationResult(
+            threshold=threshold,
+            window=window,
+            n_samples=n_boundary,
+            ece=ece,
+            bin_edges=[round(float(e), 10) for e in edges],
+            bin_centers=[round(float(c), 10) for c in centers],
+            bin_mean_predicted=bin_mean_pred,
+            bin_mean_actual=bin_mean_true,
+            bin_counts=bin_counts,
+        )
 
     def decision_curve(
         self,
