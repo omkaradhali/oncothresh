@@ -485,3 +485,59 @@ class BoundaryCalibrationResult(BaseModel):
             f"n_samples={self.n_samples}, "
             f"ece={ece_str})"
         )
+
+
+class CompareModelsResult(BaseModel):
+    """
+    Side-by-side comparison of two or more models at the same clinical decision threshold.
+
+    Each model is represented by one ThresholdResult — the metrics produced by running
+    evaluate() at the shared threshold. The comparison shows all standard classification
+    metrics (sensitivity, specificity, PPV, NPV, F1, MCC, accuracy) for each model so
+    clinicians and researchers can judge which model performs better at a given cutoff.
+
+    Typical use case: comparing UNI vs CONCH feature extractors at the 20% TC threshold,
+    or comparing a new model version against a published baseline.
+
+    Attributes
+    ----------
+    threshold : float
+        The clinical cutoff at which all models were evaluated.
+    model_names : list[str]
+        Display names for each model, in the same order as ``results``.
+    results : list[ThresholdResult]
+        One ThresholdResult per model, ordered to match ``model_names``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    threshold: float = Field(
+        description="The clinical cutoff at which all models were evaluated."
+    )
+    model_names: list[str] = Field(
+        description="Display name for each model, ordered to match results."
+    )
+    results: list[ThresholdResult] = Field(
+        description="One ThresholdResult per model, ordered to match model_names."
+    )
+
+    _METRICS: tuple[str, ...] = (
+        "sensitivity", "specificity", "ppv", "npv", "f1", "mcc", "accuracy"
+    )
+
+    def __str__(self) -> str:
+        col = 12
+        label_col = 14
+        header = f"{'Metric':<{label_col}}" + "".join(f"{name:>{col}}" for name in self.model_names)
+        sep = "-" * (label_col + col * len(self.model_names))
+        rows = [
+            f"CompareModelsResult(threshold={self.threshold:.2f}, n_models={len(self.results)})",
+            header,
+            sep,
+        ]
+        for metric in self._METRICS:
+            row = f"{metric:<{label_col}}" + "".join(
+                f"{getattr(r, metric):>{col}.3f}" for r in self.results
+            )
+            rows.append(row)
+        return "\n".join(rows)

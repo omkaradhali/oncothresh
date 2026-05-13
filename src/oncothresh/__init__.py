@@ -17,10 +17,11 @@ Quick start::
     report = ev.multi_threshold_report(thresholds=[0.20, 0.50])
 """
 
-from oncothresh._evaluator import ThresholdEvaluator
+from oncothresh._evaluator import ThresholdEvaluator, compare_models
 from oncothresh._results import (
     BootstrapResult,
     BoundaryCalibrationResult,
+    CompareModelsResult,
     ConfidenceInterval,
     DecisionCurveResult,
     MultiThresholdReport,
@@ -32,6 +33,7 @@ from oncothresh._results import (
 __version__ = "0.1.0"
 __all__ = [
     "ThresholdEvaluator",
+    "compare_models",
     "ThresholdResult",
     "BootstrapResult",
     "ConfidenceInterval",
@@ -40,4 +42,5 @@ __all__ = [
     "NNTResult",
     "ThresholdSensitivityResult",
     "BoundaryCalibrationResult",
+    "CompareModelsResult",
 ]

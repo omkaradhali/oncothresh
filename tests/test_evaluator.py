@@ -4,9 +4,10 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-from oncothresh import ThresholdEvaluator
+from oncothresh import ThresholdEvaluator, compare_models
 from oncothresh._results import (
     BootstrapResult,
+    CompareModelsResult,
     DecisionCurveResult,
     MultiThresholdReport,
     ThresholdResult,
@@ -363,3 +364,128 @@ def test_decision_curve_result_is_frozen():
 def test_decision_curve_str_contains_n_points():
     result = _dca_evaluator().decision_curve(thresholds=[0.20, 0.50])
     assert "n_points=2" in str(result)
+
+
+# compare_models()
+#
+# Two evaluators used throughout:
+#   ev_perfect: y_pred == y_true → all metrics = 1.0 at threshold=0.5
+#   ev_known:   known confusion matrix at threshold=0.5:
+#               TP=2, FP=1, FN=1, TN=2 → sensitivity=specificity=ppv=npv=2/3
+
+
+def test_compare_models_returns_correct_type():
+    result = compare_models([_perfect_evaluator(), _known_evaluator()], threshold=0.5)
+    assert isinstance(result, CompareModelsResult)
+
+
+def test_compare_models_result_count_matches_evaluators():
+    result = compare_models([_perfect_evaluator(), _known_evaluator()], threshold=0.5)
+    assert len(result.results) == 2
+    assert len(result.model_names) == 2
+
+
+def test_compare_models_threshold_stored():
+    result = compare_models([_perfect_evaluator(), _known_evaluator()], threshold=0.5)
+    assert result.threshold == pytest.approx(0.5)
+
+
+def test_compare_models_default_names():
+    result = compare_models([_perfect_evaluator(), _known_evaluator()], threshold=0.5)
+    assert result.model_names == ["Model 1", "Model 2"]
+
+
+def test_compare_models_custom_names():
+    result = compare_models(
+        [_perfect_evaluator(), _known_evaluator()],
+        threshold=0.5,
+        model_names=["UNI", "CONCH"],
+    )
+    assert result.model_names == ["UNI", "CONCH"]
+
+
+def test_compare_models_metrics_match_individual_evaluate():
+    """Each model's metrics in CompareModelsResult must equal evaluate() called directly."""
+    ev1 = _perfect_evaluator()
+    ev2 = _known_evaluator()
+    direct1 = ev1.evaluate(threshold=0.5)
+    direct2 = ev2.evaluate(threshold=0.5)
+
+    compared = compare_models([ev1, ev2], threshold=0.5)
+
+    for metric in ("sensitivity", "specificity", "ppv", "npv", "f1", "mcc", "accuracy"):
+        assert getattr(compared.results[0], metric) == pytest.approx(
+            getattr(direct1, metric), abs=1e-9
+        ), f"Model 1 {metric} mismatch"
+        assert getattr(compared.results[1], metric) == pytest.approx(
+            getattr(direct2, metric), abs=1e-9
+        ), f"Model 2 {metric} mismatch"
+
+
+def test_compare_models_three_models():
+    rng = np.random.default_rng(99)
+    y_true = rng.uniform(0, 1, 50)
+    ev1 = ThresholdEvaluator(y_true=y_true, y_pred=y_true.copy())
+    ev2 = ThresholdEvaluator(y_true=y_true, y_pred=rng.uniform(0, 1, 50))
+    ev3 = ThresholdEvaluator(y_true=y_true, y_pred=rng.uniform(0, 1, 50))
+
+    result = compare_models([ev1, ev2, ev3], threshold=0.5, model_names=["A", "B", "C"])
+    assert len(result.results) == 3
+    assert result.model_names == ["A", "B", "C"]
+
+
+def test_compare_models_results_order_preserved():
+    """Results must appear in the same order as the evaluators list."""
+    ev_perfect = _perfect_evaluator()
+    ev_known = _known_evaluator()
+    result = compare_models([ev_perfect, ev_known], threshold=0.5)
+
+    # Perfect model: sensitivity=1.0. Known model: sensitivity=2/3.
+    assert result.results[0].sensitivity == pytest.approx(1.0)
+    assert result.results[1].sensitivity == pytest.approx(2 / 3, abs=1e-9)
+
+
+def test_compare_models_too_few_evaluators_raises():
+    with pytest.raises(ValueError, match="at least 2"):
+        compare_models([_perfect_evaluator()], threshold=0.5)
+
+
+def test_compare_models_empty_evaluators_raises():
+    with pytest.raises(ValueError, match="at least 2"):
+        compare_models([], threshold=0.5)
+
+
+def test_compare_models_name_length_mismatch_raises():
+    with pytest.raises(ValueError, match="model_names length"):
+        compare_models(
+            [_perfect_evaluator(), _known_evaluator()],
+            threshold=0.5,
+            model_names=["Only One"],
+        )
+
+
+def test_compare_models_result_is_frozen():
+    result = compare_models([_perfect_evaluator(), _known_evaluator()], threshold=0.5)
+    with pytest.raises(ValidationError):
+        result.threshold = 0.99  # type: ignore[misc]
+
+
+def test_compare_models_str_contains_model_names():
+    result = compare_models(
+        [_perfect_evaluator(), _known_evaluator()],
+        threshold=0.5,
+        model_names=["UNI", "CONCH"],
+    )
+    s = str(result)
+    assert "UNI" in s
+    assert "CONCH" in s
+
+
+def test_compare_models_str_contains_threshold():
+    result = compare_models([_perfect_evaluator(), _known_evaluator()], threshold=0.5)
+    assert "0.50" in str(result)
+
+
+def test_compare_models_str_contains_n_models():
+    result = compare_models([_perfect_evaluator(), _known_evaluator()], threshold=0.5)
+    assert "n_models=2" in str(result)

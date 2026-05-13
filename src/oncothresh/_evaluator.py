@@ -6,6 +6,7 @@ from sklearn.metrics import confusion_matrix, matthews_corrcoef
 from oncothresh._results import (
     BootstrapResult,
     BoundaryCalibrationResult,
+    CompareModelsResult,
     ConfidenceInterval,
     DecisionCurveResult,
     MultiThresholdReport,
@@ -712,3 +713,65 @@ class ThresholdEvaluator:
     def _safe_divide(numerator: float, denominator: float) -> float:
         """Return 0.0 when denominator is zero rather than raising."""
         return float(numerator / denominator) if denominator != 0 else 0.0
+
+
+def compare_models(
+    evaluators: list[ThresholdEvaluator],
+    threshold: float,
+    model_names: list[str] | None = None,
+) -> CompareModelsResult:
+    """
+    Compare two or more models side-by-side at the same clinical decision threshold.
+
+    Runs evaluate() on each evaluator at the given threshold and bundles the results
+    into a CompareModelsResult. Each model's full metric set (sensitivity, specificity,
+    PPV, NPV, F1, MCC, accuracy) appears in the same structure so comparisons are direct.
+
+    Parameters
+    ----------
+    evaluators : list[ThresholdEvaluator]
+        Two or more ThresholdEvaluator instances, one per model to compare.
+        Each may have different y_true/y_pred arrays (e.g. different model architectures
+        evaluated on the same test set — pass the same y_true to each but different y_pred).
+    threshold : float
+        The clinical cutoff at which all models are evaluated (e.g. 0.20 for NGS eligibility).
+    model_names : list[str] | None
+        Optional display names for the models, in the same order as ``evaluators``.
+        Defaults to ["Model 1", "Model 2", ...] when not provided.
+
+    Returns
+    -------
+    CompareModelsResult
+        One ThresholdResult per model, accessible via .results, plus .model_names and
+        .threshold.
+
+    Raises
+    ------
+    ValueError
+        If fewer than 2 evaluators are provided, or if model_names is given but its length
+        does not match the number of evaluators.
+
+    Examples
+    --------
+    >>> ev_uni   = ThresholdEvaluator(y_true=tc_scores, y_pred=uni_preds)
+    >>> ev_conch = ThresholdEvaluator(y_true=tc_scores, y_pred=conch_preds)
+    >>> report = compare_models([ev_uni, ev_conch], threshold=0.20,
+    ...                         model_names=["UNI", "CONCH"])
+    >>> print(report)
+    """
+    if len(evaluators) < 2:
+        raise ValueError(
+            f"compare_models requires at least 2 evaluators, got {len(evaluators)}"
+        )
+    if model_names is not None and len(model_names) != len(evaluators):
+        raise ValueError(
+            f"model_names length ({len(model_names)}) must match "
+            f"number of evaluators ({len(evaluators)})"
+        )
+
+    names = model_names if model_names is not None else [
+        f"Model {i + 1}" for i in range(len(evaluators))
+    ]
+    results = [ev.evaluate(threshold) for ev in evaluators]
+
+    return CompareModelsResult(threshold=threshold, model_names=names, results=results)
