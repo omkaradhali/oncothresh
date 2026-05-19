@@ -259,6 +259,7 @@ def test_multi_threshold_empty_raises():
 #   NB_model  = 3/4 - 0   = 0.75
 #   NB_all    = 0.75 - 0.25*0.25 = 0.6875
 
+
 def _dca_evaluator() -> ThresholdEvaluator:
     """Perfect model on 4 samples — gives clean, hand-verifiable NB values."""
     y = [0.8, 0.9, 0.1, 0.2]

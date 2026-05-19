@@ -263,12 +263,8 @@ class NNTResult(BaseModel):
     npv: float = Field(
         description="Negative predictive value used to derive nnt_negative (from evaluate())."
     )
-    n_positive: int = Field(
-        description="Ground-truth positive sample count at this threshold."
-    )
-    n_negative: int = Field(
-        description="Ground-truth negative sample count at this threshold."
-    )
+    n_positive: int = Field(description="Ground-truth positive sample count at this threshold.")
+    n_negative: int = Field(description="Ground-truth negative sample count at this threshold.")
     n_total: int = Field(description="Total sample count (n_positive + n_negative).")
 
     def __str__(self) -> str:
@@ -511,9 +507,7 @@ class CompareModelsResult(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    threshold: float = Field(
-        description="The clinical cutoff at which all models were evaluated."
-    )
+    threshold: float = Field(description="The clinical cutoff at which all models were evaluated.")
     model_names: list[str] = Field(
         description="Display name for each model, ordered to match results."
     )
@@ -522,7 +516,13 @@ class CompareModelsResult(BaseModel):
     )
 
     _METRICS: tuple[str, ...] = (
-        "sensitivity", "specificity", "ppv", "npv", "f1", "mcc", "accuracy"
+        "sensitivity",
+        "specificity",
+        "ppv",
+        "npv",
+        "f1",
+        "mcc",
+        "accuracy",
     )
 
     def __str__(self) -> str:

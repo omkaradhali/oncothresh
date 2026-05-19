@@ -78,7 +78,6 @@ class ThresholdEvaluator:
         if len(self.y_true) < 2:
             raise ValueError("At least 2 samples are required")
 
-
     def evaluate(self, threshold: float) -> ThresholdResult:
         """
         Compute classification metrics at a single clinical decision threshold.
@@ -219,7 +218,6 @@ class ThresholdEvaluator:
             raise ValueError("thresholds must not be empty")
         results = [self.evaluate(t) for t in thresholds]
         return MultiThresholdReport(results=results)
-
 
     def nnt(self, threshold: float) -> NNTResult:
         """
@@ -760,18 +758,18 @@ def compare_models(
     >>> print(report)
     """
     if len(evaluators) < 2:
-        raise ValueError(
-            f"compare_models requires at least 2 evaluators, got {len(evaluators)}"
-        )
+        raise ValueError(f"compare_models requires at least 2 evaluators, got {len(evaluators)}")
     if model_names is not None and len(model_names) != len(evaluators):
         raise ValueError(
             f"model_names length ({len(model_names)}) must match "
             f"number of evaluators ({len(evaluators)})"
         )
 
-    names = model_names if model_names is not None else [
-        f"Model {i + 1}" for i in range(len(evaluators))
-    ]
+    names = (
+        model_names
+        if model_names is not None
+        else [f"Model {i + 1}" for i in range(len(evaluators))]
+    )
     results = [ev.evaluate(threshold) for ev in evaluators]
 
     return CompareModelsResult(threshold=threshold, model_names=names, results=results)
