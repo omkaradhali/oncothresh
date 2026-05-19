@@ -14,9 +14,14 @@ keywords = ["oncology", "pathology", "AI", "evaluation", "clinical threshold"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
+    "Intended Audience :: Healthcare Industry",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
     "numpy>=1.26",
@@ -35,6 +40,7 @@ dev = [
 [project.urls]
 Homepage = "https://github.com/omkaradhali/oncothresh"
 Repository = "https://github.com/omkaradhali/oncothresh"
+Issues = "https://github.com/omkaradhali/oncothresh/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/oncothresh"]
