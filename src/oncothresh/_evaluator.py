@@ -366,14 +366,21 @@ class ThresholdEvaluator:
         if step <= 0:
             raise ValueError(f"step must be positive, got {step}")
 
-        # Build the sweep grid using linspace rather than arange to avoid floating-point
-        # drift. arange with a float step accumulates rounding error over many steps
-        # (e.g. 0.01 + 0.01 + ... != exact multiples). linspace guarantees the exact
-        # number of points and places them uniformly regardless of float representation.
-        n_steps = int(round(2 * delta / step)) + 1
-        lo = max(0.0, threshold - delta)
-        hi = min(1.0, threshold + delta)
-        pts = np.linspace(lo, hi, n_steps)
+        # Build the sweep grid at the requested step size, then filter to [0, 1].
+        # Earlier versions clamped lo/hi into [0, 1] *before* linspace; with a fixed
+        # n_steps over a shortened range this silently compressed the step size when
+        # the window hit a boundary (e.g. threshold=0.02, delta=0.05 → linspace step
+        # 0.007 instead of the requested 0.01).
+        #
+        # Integer offsets times `step` keep the grid floating-point exact: every entry
+        # is a true multiple of `step` away from `threshold`, regardless of how many
+        # steps are taken. We then clip endpoints to [0, 1] for display.
+        n_half = int(round(delta / step))
+        offsets = np.arange(-n_half, n_half + 1) * step
+        pts_raw = threshold + offsets
+        # Keep only points inside [0, 1] (with a tiny tolerance for float endpoints).
+        in_range = (pts_raw >= -1e-12) & (pts_raw <= 1.0 + 1e-12)
+        pts = np.clip(pts_raw[in_range], 0.0, 1.0)
 
         sensitivities: list[float] = []
         specificities: list[float] = []

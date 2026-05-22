@@ -7,10 +7,13 @@ from pydantic import ValidationError
 from oncothresh import ThresholdEvaluator, compare_models
 from oncothresh._results import (
     BootstrapResult,
+    BoundaryCalibrationResult,
     CompareModelsResult,
     DecisionCurveResult,
     MultiThresholdReport,
+    NNTResult,
     ThresholdResult,
+    ThresholdSensitivityResult,
 )
 
 
@@ -417,6 +420,225 @@ def test_decision_curve_rejects_y_pred_outside_unit_interval():
     ev = ThresholdEvaluator(y_true=[0.1, 0.2, 0.8, 0.9], y_pred=[0.0, 0.5, 1.2, 0.9])
     with pytest.raises(ValueError, match="y_pred must lie in"):
         ev.decision_curve(clinical_threshold=0.5)
+
+
+# nnt()
+#
+# Reuses _known_evaluator (TP=2, FP=1, FN=1, TN=2 at threshold=0.5 → PPV=NPV=2/3).
+# nnt_positive = 1/PPV = 1.5; nnt_negative = 1/(1-NPV) = 3.0.
+
+
+def test_nnt_returns_correct_type():
+    result = _known_evaluator().nnt(threshold=0.5)
+    assert isinstance(result, NNTResult)
+
+
+def test_nnt_positive_known_case():
+    result = _known_evaluator().nnt(threshold=0.5)
+    assert result.nnt_positive == pytest.approx(1.5, abs=1e-9)
+
+
+def test_nnt_negative_known_case():
+    result = _known_evaluator().nnt(threshold=0.5)
+    assert result.nnt_negative == pytest.approx(3.0, abs=1e-9)
+
+
+def test_nnt_ppv_npv_match_evaluate():
+    """The stored PPV/NPV must match what evaluate() reports at the same threshold."""
+    ev = _known_evaluator()
+    point = ev.evaluate(threshold=0.5)
+    nnt = ev.nnt(threshold=0.5)
+    assert nnt.ppv == pytest.approx(point.ppv)
+    assert nnt.npv == pytest.approx(point.npv)
+
+
+def test_nnt_perfect_model_returns_inf_negative():
+    """NPV=1 means no clearance ever hides a missed positive → nnt_negative = inf."""
+    ev = ThresholdEvaluator(y_true=[0.1, 0.2, 0.8, 0.9], y_pred=[0.1, 0.2, 0.8, 0.9])
+    result = ev.nnt(threshold=0.5)
+    assert result.nnt_positive == pytest.approx(1.0)
+    assert result.nnt_negative == float("inf")
+
+
+def test_nnt_zero_ppv_returns_inf_positive():
+    """PPV=0 means every flag is wrong → nnt_positive = inf (clinical meaning is clear)."""
+    # All flagged samples are true negatives; no true positives flagged.
+    ev = ThresholdEvaluator(
+        y_true=[0.1, 0.2, 0.8, 0.9],
+        y_pred=[0.9, 0.8, 0.2, 0.1],  # inverted predictions
+    )
+    result = ev.nnt(threshold=0.5)
+    assert result.nnt_positive == float("inf")
+
+
+def test_nnt_counts_match_evaluate():
+    result = _known_evaluator().nnt(threshold=0.5)
+    assert result.n_total == 6
+    assert result.n_positive == 3
+    assert result.n_negative == 3
+
+
+def test_nnt_result_is_frozen():
+    result = _known_evaluator().nnt(threshold=0.5)
+    with pytest.raises(ValidationError):
+        result.nnt_positive = 2.0  # type: ignore[misc]
+
+
+def test_nnt_str_handles_inf():
+    """__str__ must render inf as a clean symbol, not 'inf'."""
+    ev = ThresholdEvaluator(y_true=[0.1, 0.2, 0.8, 0.9], y_pred=[0.1, 0.2, 0.8, 0.9])
+    result = ev.nnt(threshold=0.5)
+    assert "∞" in str(result)
+
+
+# threshold_sensitivity()
+#
+# These tests exist primarily to lock down the linspace-clamp bug that previously
+# allowed the requested step size to be silently compressed when the window hit a
+# [0, 1] boundary. The key invariant: consecutive thresholds differ by exactly
+# `step`, regardless of clamping.
+
+
+def test_threshold_sensitivity_returns_correct_type():
+    result = _known_evaluator().threshold_sensitivity(threshold=0.5)
+    assert isinstance(result, ThresholdSensitivityResult)
+
+
+def test_threshold_sensitivity_step_size_preserved_when_not_clamped():
+    """Standard case (no boundary clip): 11 points at step 0.01 over [0.45, 0.55]."""
+    result = _known_evaluator().threshold_sensitivity(threshold=0.5, delta=0.05, step=0.01)
+    assert len(result.thresholds) == 11
+    diffs = np.diff(result.thresholds)
+    assert np.allclose(diffs, 0.01, atol=1e-9)
+
+
+def test_threshold_sensitivity_step_size_preserved_when_low_clamped():
+    """
+    Regression test for the linspace-clamp bug.
+
+    threshold=0.02, delta=0.05, step=0.01. Without the fix linspace ran over
+    [0, 0.07] with 11 points (step 0.007). With the fix the negative offsets are
+    dropped and the surviving points retain step 0.01.
+    """
+    result = _known_evaluator().threshold_sensitivity(threshold=0.02, delta=0.05, step=0.01)
+    diffs = np.diff(result.thresholds)
+    assert np.allclose(diffs, 0.01, atol=1e-9)
+    # All points must lie in [0, 1].
+    assert all(0.0 <= t <= 1.0 for t in result.thresholds)
+
+
+def test_threshold_sensitivity_step_size_preserved_when_high_clamped():
+    """Same bug, mirrored at the upper boundary."""
+    result = _known_evaluator().threshold_sensitivity(threshold=0.98, delta=0.05, step=0.01)
+    diffs = np.diff(result.thresholds)
+    assert np.allclose(diffs, 0.01, atol=1e-9)
+    assert all(0.0 <= t <= 1.0 for t in result.thresholds)
+
+
+def test_threshold_sensitivity_nominal_index_points_at_threshold():
+    result = _known_evaluator().threshold_sensitivity(threshold=0.5, delta=0.05, step=0.01)
+    assert result.thresholds[result.nominal_index] == pytest.approx(0.5, abs=1e-9)
+
+
+def test_threshold_sensitivity_shifts_are_signed_offsets():
+    result = _known_evaluator().threshold_sensitivity(threshold=0.5, delta=0.05, step=0.01)
+    assert result.shifts[0] == pytest.approx(-0.05, abs=1e-9)
+    assert result.shifts[-1] == pytest.approx(0.05, abs=1e-9)
+    assert result.shifts[result.nominal_index] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_threshold_sensitivity_arrays_aligned():
+    """thresholds, shifts, sensitivities, specificities must all have the same length."""
+    result = _known_evaluator().threshold_sensitivity(threshold=0.5, delta=0.05, step=0.01)
+    n = len(result.thresholds)
+    assert len(result.shifts) == n
+    assert len(result.sensitivities) == n
+    assert len(result.specificities) == n
+
+
+def test_threshold_sensitivity_rejects_invalid_params():
+    ev = _known_evaluator()
+    with pytest.raises(ValueError, match="delta"):
+        ev.threshold_sensitivity(threshold=0.5, delta=0.0)
+    with pytest.raises(ValueError, match="step"):
+        ev.threshold_sensitivity(threshold=0.5, delta=0.05, step=0.0)
+
+
+def test_threshold_sensitivity_result_is_frozen():
+    result = _known_evaluator().threshold_sensitivity(threshold=0.5)
+    with pytest.raises(ValidationError):
+        result.thresholds = [0.5]  # type: ignore[misc]
+
+
+# boundary_calibration()
+#
+# Boundary-weighted ECE inside [threshold - window, threshold + window]. With a
+# perfectly-calibrated model (y_pred == y_true) inside the window, ECE = 0.0.
+
+
+def _boundary_eval_perfect() -> ThresholdEvaluator:
+    """20 samples evenly spread across [0.10, 0.30] with perfectly-calibrated predictions."""
+    y = np.linspace(0.10, 0.30, 20)
+    return ThresholdEvaluator(y_true=y, y_pred=y.copy())
+
+
+def test_boundary_calibration_returns_correct_type():
+    result = _boundary_eval_perfect().boundary_calibration(threshold=0.20)
+    assert isinstance(result, BoundaryCalibrationResult)
+
+
+def test_boundary_calibration_perfect_model_ece_is_zero():
+    """y_pred == y_true inside the boundary zone → mean(pred) == mean(true) per bin → ECE = 0."""
+    result = _boundary_eval_perfect().boundary_calibration(threshold=0.20, window=0.10, n_bins=5)
+    assert result.ece == pytest.approx(0.0, abs=1e-9)
+
+
+def test_boundary_calibration_biased_model_ece_positive():
+    """Systematic upward bias inside the zone → ECE > 0."""
+    y_true = np.linspace(0.10, 0.30, 20)
+    y_pred = np.clip(y_true + 0.05, 0.0, 1.0)
+    ev = ThresholdEvaluator(y_true=y_true, y_pred=y_pred)
+    result = ev.boundary_calibration(threshold=0.20, window=0.10, n_bins=5)
+    assert result.ece > 0.0
+    assert result.ece == pytest.approx(0.05, abs=1e-9)
+
+
+def test_boundary_calibration_excludes_predictions_outside_window():
+    """Samples outside [threshold ± window] must not contribute to ECE."""
+    # 10 samples inside [0.10, 0.30] perfectly calibrated; 10 samples outside the
+    # window with large bias — the ECE should still come out as 0.0 because
+    # boundary_calibration filters by y_pred ∈ [threshold ± window].
+    y_in = np.linspace(0.12, 0.28, 10)
+    y_out = np.array([0.50, 0.60, 0.70, 0.80, 0.90, 0.05, 0.04, 0.03, 0.02, 0.01])
+    y_true = np.concatenate([y_in, y_out])
+    y_pred = np.concatenate([y_in.copy(), np.zeros(10)])  # outside samples grossly miscalibrated
+    ev = ThresholdEvaluator(y_true=y_true, y_pred=y_pred)
+    result = ev.boundary_calibration(threshold=0.20, window=0.10, n_bins=5)
+    assert result.ece == pytest.approx(0.0, abs=1e-9)
+
+
+def test_boundary_calibration_empty_zone_returns_nan():
+    """If no predictions fall inside the boundary zone, ECE is NaN, not a crash."""
+    y_true = np.array([0.80, 0.85, 0.90, 0.95])
+    y_pred = np.array([0.80, 0.85, 0.90, 0.95])  # all far from threshold=0.20
+    ev = ThresholdEvaluator(y_true=y_true, y_pred=y_pred)
+    result = ev.boundary_calibration(threshold=0.20, window=0.05, n_bins=5)
+    assert np.isnan(result.ece)
+    assert result.n_samples == 0
+
+
+def test_boundary_calibration_rejects_invalid_params():
+    ev = _boundary_eval_perfect()
+    with pytest.raises(ValueError, match="window"):
+        ev.boundary_calibration(threshold=0.20, window=0.0)
+    with pytest.raises(ValueError, match="n_bins"):
+        ev.boundary_calibration(threshold=0.20, n_bins=0)
+
+
+def test_boundary_calibration_result_is_frozen():
+    result = _boundary_eval_perfect().boundary_calibration(threshold=0.20)
+    with pytest.raises(ValidationError):
+        result.ece = 0.5  # type: ignore[misc]
 
 
 # compare_models()
