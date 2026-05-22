@@ -3,7 +3,7 @@
 **Clinical threshold evaluation for oncology AI models.**
 
 [![CI](https://github.com/omkaradhali/oncothresh/actions/workflows/ci.yml/badge.svg)](https://github.com/omkaradhali/oncothresh/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13-blue)](https://www.python.org)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Continuous oncology AI models — tumor cellularity (TC), Ki-67, TMB, PD-L1 — are deployed at specific clinical thresholds that decide patient treatment. Global metrics such as ICC, MAE, and AUC measure overall agreement; they do not answer the question that matters at the bedside: *how reliable is this model at the exact cutoff that governs the decision?*
@@ -25,7 +25,7 @@ Continuous oncology AI models — tumor cellularity (TC), Ki-67, TMB, PD-L1 — 
 pip install oncothresh
 ```
 
-Requires Python 3.12+. Core dependencies: `numpy`, `scikit-learn`, `matplotlib`, `pydantic`.
+Requires Python 3.10+. Core dependencies: `numpy`, `scikit-learn`, `pydantic`. Plotting helpers (forthcoming in v0.1.1) live behind an optional extra: `pip install oncothresh[plotting]`.
 
 ---
 
@@ -166,6 +166,29 @@ Rules of thumb (in the same units as the scores):
 ### 7. `decision_curve()` — net benefit across threshold probabilities
 
 `decision_curve` requires you to name the clinical decision under analysis. Pass `clinical_threshold` (e.g. 0.20 for NGS-eligibility TC) and the disease label is fixed once as `y_true >= clinical_threshold`; only the clinician's intervention threshold `pt` is swept. `y_pred` must be in `[0, 1]` and is interpreted as the model's predicted probability that `y_true >= clinical_threshold` — if your model emits a raw biomarker score, calibrate (Platt / isotonic) first.
+
+**Calibrating a raw biomarker score to a probability.** A continuous TC or Ki-67 score is not a probability; passing it to `decision_curve` directly raises `ValueError`. Convert it with scikit-learn's `CalibratedClassifierCV` (or `IsotonicRegression`) against the clinical-threshold label:
+
+```python
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.linear_model import LogisticRegression
+
+# Fit on a held-out calibration set: features are the raw model scores reshaped to
+# (n, 1); labels are 1 where y_true clears the clinical threshold, 0 otherwise.
+cal = CalibratedClassifierCV(
+    estimator=LogisticRegression(),
+    method="isotonic",  # use "sigmoid" for Platt scaling
+    cv=5,
+)
+cal.fit(raw_scores_calib.reshape(-1, 1), (y_true_calib >= 0.20).astype(int))
+
+# Predict P(y_true >= 0.20) for the evaluation set, then call decision_curve.
+y_pred_prob = cal.predict_proba(raw_scores_eval.reshape(-1, 1))[:, 1]
+ev = ThresholdEvaluator(y_true=y_true_eval, y_pred=y_pred_prob)
+dca = ev.decision_curve(clinical_threshold=0.20)
+```
+
+Best practice: fit the calibrator on a separate calibration split (not the data you used to train the model), and report calibration quality alongside DCA — `ev.boundary_calibration(threshold=0.20)` is the natural companion.
 
 ```python
 dca = ev.decision_curve(
