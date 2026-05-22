@@ -245,42 +245,54 @@ def test_multi_threshold_empty_raises():
 
 # decision_curve()
 #
+# DCA semantics (Vickers 2006):
+#   - clinical_threshold defines the disease label, fixed across the sweep:
+#       y_true_bin = (y_true >= clinical_threshold)
+#   - y_pred is a calibrated probability P(y_true >= clinical_threshold), in [0, 1].
+#   - The pt sweep moves the clinician's intervention threshold:
+#       y_pred_bin(pt) = (y_pred >= pt)
+#
 # Known case used throughout:
-#   y_true = [0.8, 0.9, 0.1, 0.2]
-#   y_pred = [0.8, 0.9, 0.1, 0.2]  ← perfect model
+#   clinical_threshold = 0.5
+#   y_true = [0.1, 0.2, 0.8, 0.9]  → y_true_bin = [0, 0, 1, 1], prevalence = 0.5, N = 4
+#   y_pred = [0.1, 0.2, 0.8, 0.9]  (perfectly calibrated probabilities)
 #
-# At pt=0.50:  y_true_bin=[1,1,0,0], y_pred_bin=[1,1,0,0]
-#   TP=2, FP=0, N=4, harm_weight=1.0, prevalence=0.5
-#   NB_model  = 2/4 - 0/4 * 1.0 = 0.50
-#   NB_all    = 0.5  - 0.5  * 1.0 = 0.00
+# At pt=0.50:  y_pred_bin=[0,0,1,1]
+#   TP=2, FP=0, harm_weight=1.0
+#   NB_model = 2/4 - 0/4 * 1.0  = 0.5
+#   NB_all   = 0.5 - 0.5 * 1.0  = 0.0
 #
-# At pt=0.20:  y_true_bin=[1,1,0,1], y_pred_bin=[1,1,0,1]  (0.2 >= 0.2 is True)
-#   TP=3, FP=0, N=4, harm_weight=0.25, prevalence=0.75
-#   NB_model  = 3/4 - 0   = 0.75
-#   NB_all    = 0.75 - 0.25*0.25 = 0.6875
+# At pt=0.20:  y_pred_bin=[0,1,1,1]  (0.2 >= 0.2 is True)
+#   TP=2, FP=1, harm_weight=0.25
+#   NB_model = 2/4 - 1/4 * 0.25 = 0.4375
+#   NB_all   = 0.5 - 0.5 * 0.25 = 0.375
 
 
 def _dca_evaluator() -> ThresholdEvaluator:
-    """Perfect model on 4 samples — gives clean, hand-verifiable NB values."""
-    y = [0.8, 0.9, 0.1, 0.2]
+    """Perfect calibration on 4 samples — gives clean, hand-verifiable NB values."""
+    y = [0.1, 0.2, 0.8, 0.9]
     return ThresholdEvaluator(y_true=y, y_pred=y)
 
 
 def _dca_evaluator_with_fp() -> ThresholdEvaluator:
-    """Model with one false positive at pt=0.50 (index 2: true=0.1, pred=0.6)."""
-    y_true = [0.8, 0.9, 0.1, 0.2]
-    y_pred = [0.8, 0.9, 0.6, 0.2]
+    """Model flags index 1 (y_true=0.2, y_pred=0.6) as positive at pt=0.50.
+
+    Under clinical_threshold=0.5: y_true_bin=[0,0,1,1], prevalence=0.5, N=4.
+    At pt=0.50: y_pred_bin=[0,1,1,1] → TP=2, FP=1.
+    """
+    y_true = [0.1, 0.2, 0.8, 0.9]
+    y_pred = [0.1, 0.6, 0.8, 0.9]
     return ThresholdEvaluator(y_true=y_true, y_pred=y_pred)
 
 
 def test_decision_curve_returns_correct_type():
-    result = _dca_evaluator().decision_curve(thresholds=[0.20, 0.50])
+    result = _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.20, 0.50])
     assert isinstance(result, DecisionCurveResult)
 
 
 def test_decision_curve_output_lengths_match():
     """thresholds, nb_model, and nb_all must all have the same length."""
-    result = _dca_evaluator().decision_curve(thresholds=[0.20, 0.50, 0.80])
+    result = _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.20, 0.50, 0.80])
     assert len(result.thresholds) == 3
     assert len(result.net_benefit_model) == 3
     assert len(result.net_benefit_all) == 3
@@ -288,83 +300,123 @@ def test_decision_curve_output_lengths_match():
 
 def test_decision_curve_default_thresholds_length():
     """Default sweep is 99 points (np.linspace(0.01, 0.99, 99))."""
-    result = _dca_evaluator().decision_curve()
+    result = _dca_evaluator().decision_curve(clinical_threshold=0.5)
     assert len(result.thresholds) == 99
 
 
+def test_decision_curve_clinical_threshold_stored():
+    """The result is self-describing: clinical_threshold and prevalence are persisted."""
+    result = _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.50])
+    assert result.clinical_threshold == pytest.approx(0.5)
+    assert result.prevalence == pytest.approx(0.5)
+
+
+def test_decision_curve_prevalence_fixed_across_sweep():
+    """prevalence is derived once from clinical_threshold — does not move with pt."""
+    result = _dca_evaluator().decision_curve(
+        clinical_threshold=0.5, thresholds=[0.10, 0.20, 0.50, 0.80]
+    )
+    # Sanity: under clinical_threshold=0.5, two of four samples are positive.
+    assert result.prevalence == pytest.approx(0.5)
+
+
 def test_decision_curve_nb_model_perfect_at_pt_050():
-    # Perfect model at pt=0.50: TP=2, FP=0, N=4, harm_weight=1.0 → NB=0.5
-    result = _dca_evaluator().decision_curve(thresholds=[0.50])
+    # Perfect probs, clinical_threshold=0.5, pt=0.50: TP=2, FP=0 → NB = 2/4 = 0.5
+    result = _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.50])
     assert result.net_benefit_model[0] == pytest.approx(0.5, abs=1e-9)
 
 
 def test_decision_curve_nb_all_at_pt_050():
-    # Treat-all at pt=0.50: prevalence=0.5, harm_weight=1.0 → NB=0.0
-    result = _dca_evaluator().decision_curve(thresholds=[0.50])
+    # prevalence=0.5, harm_weight=1.0 → NB_all = 0.5 - 0.5*1.0 = 0.0
+    result = _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.50])
     assert result.net_benefit_all[0] == pytest.approx(0.0, abs=1e-9)
 
 
-def test_decision_curve_nb_model_perfect_at_pt_020():
-    # Perfect model at pt=0.20: TP=3, FP=0, N=4, harm_weight=0.25 → NB=0.75
-    result = _dca_evaluator().decision_curve(thresholds=[0.20])
-    assert result.net_benefit_model[0] == pytest.approx(0.75, abs=1e-9)
+def test_decision_curve_nb_model_at_pt_020():
+    # clinical_threshold=0.5, pt=0.20: y_pred_bin=[0,1,1,1] → TP=2, FP=1
+    # NB_model = 2/4 - 1/4 * 0.25 = 0.4375
+    result = _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.20])
+    assert result.net_benefit_model[0] == pytest.approx(0.4375, abs=1e-9)
 
 
 def test_decision_curve_nb_all_at_pt_020():
-    # Treat-all at pt=0.20: prevalence=0.75, harm_weight=0.25 → NB=0.75-0.25*0.25=0.6875
-    result = _dca_evaluator().decision_curve(thresholds=[0.20])
-    assert result.net_benefit_all[0] == pytest.approx(0.6875, abs=1e-9)
+    # prevalence=0.5 (fixed), harm_weight=0.25 → NB_all = 0.5 - 0.5*0.25 = 0.375
+    result = _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.20])
+    assert result.net_benefit_all[0] == pytest.approx(0.375, abs=1e-9)
 
 
 def test_decision_curve_fp_reduces_nb_model():
-    # Adding a false positive at pt=0.50 reduces NB: TP=2, FP=1, N=4 → NB=0.5-0.25=0.25
-    result = _dca_evaluator_with_fp().decision_curve(thresholds=[0.50])
+    # Adding one FP at pt=0.50: TP=2, FP=1, harm=1.0 → NB = 0.5 - 0.25 = 0.25
+    result = _dca_evaluator_with_fp().decision_curve(clinical_threshold=0.5, thresholds=[0.50])
     assert result.net_benefit_model[0] == pytest.approx(0.25, abs=1e-9)
 
 
 def test_decision_curve_nb_none_is_always_zero():
     """net_benefit_none is a convenience property that always returns zeros."""
-    result = _dca_evaluator().decision_curve(thresholds=[0.20, 0.50, 0.80])
+    result = _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.20, 0.50, 0.80])
     assert result.net_benefit_none == [0.0, 0.0, 0.0]
 
 
 def test_decision_curve_nb_all_can_be_negative():
     """
-    At high pt where prevalence is low, treat-all NB goes negative.
-    This is correct — do not clip. A negative NB means the strategy causes net harm.
+    When prevalence under clinical_threshold is 0, treat-all causes pure harm.
 
-    y_true = [0.1, 0.2, 0.3, 0.4], all below 0.50 → prevalence=0 at pt=0.50.
-    NB_all = 0 - 1.0 * 1.0 = -1.0
+    y_true = [0.1, 0.2, 0.3, 0.4], clinical_threshold=0.5 → y_true_bin all 0,
+    prevalence=0. At pt=0.50: NB_all = 0 - 1.0 * 1.0 = -1.0.
     """
     ev = ThresholdEvaluator(y_true=[0.1, 0.2, 0.3, 0.4], y_pred=[0.1, 0.2, 0.3, 0.4])
-    result = ev.decision_curve(thresholds=[0.50])
+    result = ev.decision_curve(clinical_threshold=0.5, thresholds=[0.50])
     assert result.net_benefit_all[0] == pytest.approx(-1.0, abs=1e-9)
+    assert result.prevalence == pytest.approx(0.0)
 
 
 def test_decision_curve_pt_at_or_above_one_returns_nan():
     """pt >= 1.0 makes pt/(1-pt) undefined — must return NaN, not crash."""
-    result = _dca_evaluator().decision_curve(thresholds=[0.50, 1.0])
+    result = _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.50, 1.0])
     assert not np.isnan(result.net_benefit_model[0])
     assert np.isnan(result.net_benefit_model[1])
     assert np.isnan(result.net_benefit_all[1])
 
 
 def test_decision_curve_perfect_model_beats_treat_all():
-    """A perfect model should have higher NB than treat-all at clinical thresholds."""
-    result = _dca_evaluator().decision_curve(thresholds=[0.20, 0.50])
+    """A perfectly-calibrated model should have NB >= treat-all at every pt."""
+    result = _dca_evaluator().decision_curve(
+        clinical_threshold=0.5, thresholds=[0.10, 0.20, 0.50, 0.80]
+    )
     for nb_m, nb_a in zip(result.net_benefit_model, result.net_benefit_all, strict=True):
-        assert nb_m >= nb_a
+        if np.isnan(nb_m) or np.isnan(nb_a):
+            continue
+        assert nb_m >= nb_a - 1e-9
 
 
 def test_decision_curve_result_is_frozen():
-    result = _dca_evaluator().decision_curve(thresholds=[0.50])
+    result = _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.50])
     with pytest.raises(ValidationError):
         result.thresholds = [0.99]  # type: ignore[misc]
 
 
-def test_decision_curve_str_contains_n_points():
-    result = _dca_evaluator().decision_curve(thresholds=[0.20, 0.50])
-    assert "n_points=2" in str(result)
+def test_decision_curve_str_describes_inputs():
+    result = _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.20, 0.50])
+    text = str(result)
+    assert "n_points=2" in text
+    assert "clinical_threshold=0.50" in text
+    assert "prevalence=" in text
+
+
+def test_decision_curve_rejects_clinical_threshold_out_of_range():
+    """clinical_threshold must be in [0, 1]."""
+    ev = _dca_evaluator()
+    with pytest.raises(ValueError, match="clinical_threshold"):
+        ev.decision_curve(clinical_threshold=1.5)
+    with pytest.raises(ValueError, match="clinical_threshold"):
+        ev.decision_curve(clinical_threshold=-0.1)
+
+
+def test_decision_curve_rejects_y_pred_outside_unit_interval():
+    """y_pred must be a probability (DCA harm-weight assumes it). Raise loud."""
+    ev = ThresholdEvaluator(y_true=[0.1, 0.2, 0.8, 0.9], y_pred=[0.0, 0.5, 1.2, 0.9])
+    with pytest.raises(ValueError, match="y_pred must lie in"):
+        ev.decision_curve(clinical_threshold=0.5)
 
 
 # compare_models()

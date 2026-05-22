@@ -552,31 +552,41 @@ class ThresholdEvaluator:
 
     def decision_curve(
         self,
+        clinical_threshold: float,
         thresholds: np.ndarray | list[float] | None = None,
     ) -> DecisionCurveResult:
         """
-        Compute Decision Curve Analysis (DCA) across a range of clinical decision thresholds.
+        Compute Decision Curve Analysis (DCA) for a fixed clinical decision.
 
         Why DCA? Standard metrics (sensitivity, specificity, AUC) measure discrimination —
         how well the model separates positives from negatives. They cannot answer: "Is using
         this model to guide clinical decisions actually better than a simpler policy?" DCA
-        answers that question by computing net benefit at every possible harm trade-off.
+        answers that question by computing net benefit across the range of harm trade-offs
+        a clinician might hold.
 
-        The key concept is the threshold probability ``pt``: the probability of disease at
-        which a clinician would decide to intervene. A clinician who says "I'll order NGS
-        if there's a ≥20% chance the patient's TC is ≥20%" has pt=0.20. Their implicit
-        harm ratio is pt/(1-pt) = 0.25: they consider 4 unnecessary procedures equivalent
-        to 1 missed case.
+        How this method interprets its inputs:
 
-        At each pt, three strategies are compared::
+        - ``clinical_threshold`` defines what counts as "disease" — the disease label is
+          fixed once as ``y_true >= clinical_threshold`` and does not move during the sweep.
+          For TC at the NGS-eligibility cutoff: clinical_threshold=0.20.
+        - ``y_pred`` is interpreted as the model's predicted probability that the patient
+          is positive under that definition, i.e. P(y_true >= clinical_threshold). It must
+          lie in [0, 1]. If your model outputs a raw biomarker score, calibrate it to a
+          probability (Platt / isotonic) before calling this method.
+        - ``thresholds`` (the pt grid) sweeps the clinician's intervention threshold —
+          the probability of disease at which they would act. At each pt the model
+          classifies a patient as positive iff ``y_pred >= pt``.
+
+        At each pt three strategies are compared::
 
             Model:      NB = TP/N - FP/N x pt/(1-pt)
             Treat all:  NB = prevalence - (1-prevalence) x pt/(1-pt)
             Treat none: NB = 0  (no interventions → no harm, no benefit)
 
-        The model adds clinical value wherever its net benefit exceeds both treat-all and
-        zero. Negative net benefit means the strategy causes net harm — this is valid and
-        should not be clipped.
+        ``prevalence`` is fixed (derived from ``clinical_threshold``) and so is ``treat all``
+        at any given pt. The model adds clinical value wherever its net benefit exceeds both
+        treat-all and zero. Negative net benefit means the strategy causes net harm — this
+        is valid and should not be clipped.
 
         Interpreting the curves:
 
@@ -587,10 +597,13 @@ class ThresholdEvaluator:
 
         Parameters
         ----------
+        clinical_threshold : float
+            The cutoff that defines a positive case. ``y_true_bin = y_true >= clinical_threshold``
+            is computed once and fixed throughout the sweep. Must lie in [0, 1].
         thresholds : array-like of float or None
             The pt values to sweep. Each value must be in [0, 1); pt=1.0 is excluded
             because pt/(1-pt) is undefined there (any model with FPs would have NB=−∞).
-            Values outside [0, 1) produce NaN entries in the output.
+            Values >= 1.0 produce NaN entries in the output.
 
             For TC analysis the range [0.05, 0.50] covers both clinical cutoffs (0.20
             and 0.50) with context on either side. Defaults to np.linspace(0.01, 0.99, 99)
@@ -599,14 +612,34 @@ class ThresholdEvaluator:
         Returns
         -------
         DecisionCurveResult
-            ``thresholds``, ``net_benefit_model``, and ``net_benefit_all`` arrays of equal
-            length. Access ``net_benefit_none`` (always 0) via the result's property.
+            ``clinical_threshold``, ``prevalence``, ``thresholds``, ``net_benefit_model``,
+            and ``net_benefit_all``. Access ``net_benefit_none`` (always 0) via the
+            result's property.
+
+        Raises
+        ------
+        ValueError
+            If ``clinical_threshold`` is not in [0, 1], or if ``y_pred`` contains values
+            outside [0, 1] (it must be a probability for DCA to be meaningful).
 
         References
         ----------
         Vickers AJ, Elkin EB. Decision curve analysis: a novel method for evaluating
         prediction models. Med Decis Making. 2006;26(6):565-574.
         """
+        if not 0.0 <= clinical_threshold <= 1.0:
+            raise ValueError(f"clinical_threshold must be in [0, 1], got {clinical_threshold}")
+        # DCA's harm-weight pt/(1-pt) only has clinical meaning when y_pred is a
+        # probability. A raw biomarker score (e.g. TC%) must be calibrated first or
+        # the curve is uninterpretable. Fail loud rather than silently produce garbage.
+        if self.y_pred.min() < 0.0 or self.y_pred.max() > 1.0:
+            raise ValueError(
+                "y_pred must lie in [0, 1] for DCA (predicted probability of "
+                f"y_true >= clinical_threshold). Observed range: "
+                f"[{self.y_pred.min():.4f}, {self.y_pred.max():.4f}]. Calibrate your "
+                "model output before calling decision_curve()."
+            )
+
         if thresholds is None:
             # 99 evenly-spaced points from 1% to 99% — fine-grained enough for smooth plots,
             # excludes 0 (trivial: everyone is positive) and 1 (undefined: pt/(1−pt) → ∞).
@@ -614,6 +647,10 @@ class ThresholdEvaluator:
 
         pts = np.asarray(thresholds, dtype=float)
         n = len(self.y_true)
+
+        # Disease label is fixed for the entire sweep — this is the core DCA invariant.
+        y_true_bin = self.y_true >= clinical_threshold
+        prevalence = float(y_true_bin.mean())
 
         nb_model: list[float] = []
         nb_all: list[float] = []
@@ -626,12 +663,11 @@ class ThresholdEvaluator:
                 nb_all.append(float("nan"))
                 continue
 
-            # Binarize at this threshold — mirrors evaluate(): >= is "positive".
-            y_true_bin = self.y_true >= pt
+            # Classify at this pt — only y_pred_bin moves; y_true_bin is fixed above.
             y_pred_bin = self.y_pred >= pt
 
-            # TP: model says positive AND truly positive.
-            # FP: model says positive BUT truly negative.
+            # TP: model flags positive AND truly positive (under clinical_threshold).
+            # FP: model flags positive BUT truly negative.
             tp = int(np.sum(y_pred_bin & y_true_bin))
             fp = int(np.sum(y_pred_bin & ~y_true_bin))
 
@@ -643,15 +679,12 @@ class ThresholdEvaluator:
             # Net benefit for the model: TPs rewarded, FPs penalised by harm_weight.
             nb_model.append(tp / n - fp / n * harm_weight)
 
-            # Prevalence at this specific pt: fraction of y_true scored >= pt.
-            # Recomputed per pt because more patients are "positive" at lower cutoffs.
-            prevalence = float(y_true_bin.mean())
-
-            # Net benefit for treat-all: derived from the same formula with TP=all positives,
-            # FP=all negatives. Rearranges neatly to: prevalence − (1−prevalence) × harm_weight.
+            # Net benefit for treat-all uses the fixed prevalence (does not move with pt).
             nb_all.append(prevalence - (1.0 - prevalence) * harm_weight)
 
         return DecisionCurveResult(
+            clinical_threshold=clinical_threshold,
+            prevalence=prevalence,
             thresholds=pts.tolist(),
             net_benefit_model=nb_model,
             net_benefit_all=nb_all,

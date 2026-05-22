@@ -172,10 +172,24 @@ class DecisionCurveResult(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    clinical_threshold: float = Field(
+        description=(
+            "The clinical cutoff used to binarise y_true into disease/no-disease (fixed "
+            "for the entire sweep). For TC: 0.20 means a patient is 'positive' if their "
+            "true TC score is >= 20%. Prevalence is derived once from this binarisation."
+        )
+    )
+    prevalence: float = Field(
+        description=(
+            "Observed prevalence under ``clinical_threshold`` — fraction of samples "
+            "with y_true >= clinical_threshold. Fixed across the sweep."
+        )
+    )
     thresholds: list[float] = Field(
         description=(
             "The threshold probability (pt) values that were swept. Each pt is the "
-            "probability of disease at which a clinician would decide to intervene."
+            "predicted probability of disease at which a clinician would decide to "
+            "intervene. y_pred is interpreted as P(y_true >= clinical_threshold)."
         )
     )
     net_benefit_model: list[float] = Field(
@@ -201,8 +215,9 @@ class DecisionCurveResult(BaseModel):
         n = len(self.thresholds)
         lo, hi = self.thresholds[0], self.thresholds[-1]
         return (
-            f"DecisionCurveResult(thresholds=[{lo:.2f}–{hi:.2f}], "
-            f"n_points={n}, net_benefit_none=0.0)"
+            f"DecisionCurveResult(clinical_threshold={self.clinical_threshold:.2f}, "
+            f"prevalence={self.prevalence:.3f}, "
+            f"pt=[{lo:.2f}–{hi:.2f}], n_points={n})"
         )
 
 

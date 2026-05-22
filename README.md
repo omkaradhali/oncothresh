@@ -165,22 +165,33 @@ Rules of thumb (in the same units as the scores):
 
 ### 7. `decision_curve()` — net benefit across threshold probabilities
 
+`decision_curve` requires you to name the clinical decision under analysis. Pass `clinical_threshold` (e.g. 0.20 for NGS-eligibility TC) and the disease label is fixed once as `y_true >= clinical_threshold`; only the clinician's intervention threshold `pt` is swept. `y_pred` must be in `[0, 1]` and is interpreted as the model's predicted probability that `y_true >= clinical_threshold` — if your model emits a raw biomarker score, calibrate (Platt / isotonic) first.
+
 ```python
-dca = ev.decision_curve(thresholds=np.linspace(0.05, 0.50, 10))
+dca = ev.decision_curve(
+    clinical_threshold=0.20,
+    thresholds=np.linspace(0.05, 0.50, 10),
+)
+print(dca)
 for pt, nb_m, nb_a in zip(dca.thresholds, dca.net_benefit_model, dca.net_benefit_all):
     print(f"pt={pt:.3f}  nb_model={nb_m:+.4f}  nb_all={nb_a:+.4f}")
 ```
 
 ```
-pt=0.050  nb_model=+0.9007  nb_all=+0.9347
-pt=0.100  nb_model=+0.8222  nb_all=+0.8511
-pt=0.150  nb_model=+0.6882  nb_all=+0.7129
+DecisionCurveResult(clinical_threshold=0.20, prevalence=0.648, pt=[0.05–0.50], n_points=10)
+pt=0.050  nb_model=+0.6313  nb_all=+0.6295
+pt=0.100  nb_model=+0.6200  nb_all=+0.6089
+pt=0.150  nb_model=+0.6082  nb_all=+0.5859
 pt=0.200  nb_model=+0.5920  nb_all=+0.5600
-pt=0.250  nb_model=+0.4840  nb_all=+0.4000
-...
+pt=0.250  nb_model=+0.5560  nb_all=+0.5307
+pt=0.300  nb_model=+0.4849  nb_all=+0.4971
+pt=0.350  nb_model=+0.4160  nb_all=+0.4585
+pt=0.400  nb_model=+0.3540  nb_all=+0.4133
+pt=0.450  nb_model=+0.2620  nb_all=+0.3600
+pt=0.500  nb_model=+0.2080  nb_all=+0.2960
 ```
 
-The model adds clinical value wherever `net_benefit_model` exceeds *both* `net_benefit_all` and zero. In this example the model crosses `nb_all` right at pt=0.20 — it becomes the better strategy exactly at the clinical decision threshold.
+The model adds clinical value wherever `net_benefit_model` exceeds *both* `net_benefit_all` and zero. In this example the curves cross between pt=0.25 and pt=0.30 — at pt below the crossover the model beats treat-all; at pt above it the false positives outweigh its true positives under the clinician's harm tolerance, and treat-all becomes the safer policy. `prevalence` is fixed (derived once from `clinical_threshold=0.20`) and is reported on the result so the artefact is self-describing.
 
 Coming from R? The equivalent is `dcurves::dca()`. `oncothresh` produces the same net benefit curves with a Python/sklearn-style interface rather than R's tidy data frame style.
 
@@ -222,7 +233,7 @@ All methods live on `ThresholdEvaluator(y_true, y_pred)` unless noted.
 | `nnt(threshold)` | `NNTResult` | You want a clinician-friendly framing: flags per true positive, clearances per missed case |
 | `threshold_sensitivity(threshold, delta=0.05, step=0.01)` | `ThresholdSensitivityResult` | You want to know how fragile performance is to small threshold shifts |
 | `boundary_calibration(threshold, window=0.10, n_bins=10)` | `BoundaryCalibrationResult` | You want calibration error *at the cutoff*, not globally |
-| `decision_curve(thresholds=None)` | `DecisionCurveResult` | You want net benefit across a sweep of harm tolerances |
+| `decision_curve(clinical_threshold, thresholds=None)` | `DecisionCurveResult` | You want net benefit across a sweep of harm tolerances for a fixed clinical decision; requires `y_pred` to be a calibrated probability in `[0, 1]` |
 | `compare_models(evaluators, threshold, model_names=None)` *(module-level)* | `CompareModelsResult` | You want side-by-side metrics for two or more models at the same cutoff |
 
 Result objects are immutable Pydantic models with `.model_dump_json()` and informative `__str__` output for quick inspection.
