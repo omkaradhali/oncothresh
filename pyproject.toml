@@ -40,6 +40,13 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.4",
 ]
+# Numerical cross-validation against the reference `dcurves` (Vickers/MSKCC) DCA
+# implementation. Heavy (pandas + lifelines + statsmodels), so kept out of `dev`;
+# tests under tests/validation/ skip themselves when these are absent.
+validation = [
+    "dcurves>=1.0",
+    "pandas>=2.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/omkaradhali/oncothresh"

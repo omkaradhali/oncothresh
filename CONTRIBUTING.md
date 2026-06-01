@@ -57,6 +57,15 @@ This library is used to inform clinical decisions and to support publications. S
 - Any new statistical method must include a reference (paper or canonical implementation) in the docstring.
 - When implementing something that already exists in R or Python (e.g. `dcurves`, `scikit-learn`), include a regression test in `tests/validation/` that reproduces published numbers or matches the reference implementation to ≥4 decimal places.
 
+The validation suite depends on heavier reference packages (pandas, lifelines, statsmodels via `dcurves`) that the library itself does not need, so they live behind a `validation` extra and the tests skip themselves when the extra is absent:
+
+```bash
+uv sync --extra dev --extra validation
+uv run pytest tests/validation/ -v
+```
+
+`decision_curve()` is already covered here — it matches `dcurves` (Vickers/MSKCC) net benefit to machine precision (~1e-16).
+
 ## Reporting bugs
 
 Open a GitHub issue with:
