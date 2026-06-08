@@ -313,7 +313,7 @@ The basic diagnostic metrics (sensitivity, specificity, PPV, NPV, F1, accuracy) 
 
 ## Citing oncothresh
 
-A JOSS paper is in preparation (target submission: 2026-06-08). DOI and BibTeX entry will be added here on acceptance. Until then, please cite the GitHub repository.
+A JOSS paper has been submitted and is under review. DOI and BibTeX entry will be added here on acceptance. Until then, please cite the GitHub repository.
 
 ---
 
