@@ -2,6 +2,8 @@
 
 Thanks for your interest. `oncothresh` is a small, focused library. Contributions that sharpen the clinical-threshold use case are very welcome.
 
+This project follows a [Code of Conduct](CODE_OF_CONDUCT.md). By taking part, you agree to uphold it.
+
 ## Scope
 
 `oncothresh` evaluates oncology AI models at predefined clinical thresholds on **binary outcomes derived from continuous scores** (e.g. TC, Ki-67, TMB, PD-L1). Pull requests inside this scope (new metrics, plotting, calibration utilities, better docs) are welcome.
@@ -36,7 +38,7 @@ The same checks CI runs:
 ```bash
 uv run ruff check .
 uv run ruff format --check .
-uv run pytest tests/ --cov=src/oncothresh --cov-fail-under=70
+uv run pytest tests/ --cov=src/oncothresh --cov-fail-under=85
 ```
 
 Tests must pass on Python 3.10, 3.11, 3.12, and 3.13. The CI matrix covers all four. Locally, picking one is fine.

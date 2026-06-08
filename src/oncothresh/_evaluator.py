@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import math
+import warnings
 
 import numpy as np
+from scipy.stats import bootstrap as scipy_bootstrap
 from sklearn.metrics import confusion_matrix
 
 from oncothresh._results import (
@@ -119,6 +121,7 @@ class ThresholdEvaluator:
         n_bootstrap: int = 1000,
         confidence: float = 0.95,
         random_state: int | None = None,
+        method: str = "bca",
     ) -> BootstrapResult:
         """
         Estimate confidence intervals (CIs) for all metrics via non-parametric bootstrapping.
@@ -131,10 +134,21 @@ class ThresholdEvaluator:
         How it works:
           1. Draw n_bootstrap resamples from the dataset, each the same size as the original
              but sampled with replacement (some patients appear multiple times, some not at all).
-          2. Compute all metrics on each resample, collecting n_bootstrap values per metric.
-          3. Sort those values and cut the extreme tails: for a 95% CI, discard the bottom
-             2.5% and top 2.5%, leaving the middle 95% as the interval [lower, upper].
+          2. Recompute every metric on each resample to build a distribution per metric.
+          3. Read the interval bounds off that distribution using the chosen method (see below).
           4. Report the point estimate from the full original dataset alongside the interval.
+
+        Method:
+          The default is BCa (bias-corrected and accelerated), the recommended bootstrap
+          interval for skewed or biased statistics such as PPV and MCC at small sample sizes.
+          BCa corrects for bias and for how fast the statistic's variance changes, so it has
+          better coverage than the plain percentile interval (Efron 1987). Both methods come
+          directly from scipy.stats.bootstrap, so the interval statistics are not hand-rolled.
+
+          When a metric does not vary across resamples (for example sensitivity is exactly 1.0
+          for a perfect model), BCa is undefined. The interval then collapses to the point
+          estimate, which is the correct degenerate interval because there is no sampling
+          variability to report.
 
         Interpreting the result:
           - Tight CI (e.g. 0.857, 95% CI: 0.831-0.881) means a stable, reliable estimate.
@@ -154,38 +168,70 @@ class ThresholdEvaluator:
         random_state : int | None
             Seed for reproducibility. Set this to a fixed integer (e.g. 42) to get the
             same CI bounds across runs, which is required for reproducible published results.
+        method : str
+            "bca" (default) for bias-corrected and accelerated intervals, or "percentile"
+            for the plain percentile interval.
 
         Returns
         -------
         BootstrapResult
-            Point estimate and CI bounds for every metric at the given threshold.
+            Point estimate and CI bounds for every metric at the given threshold, plus the
+            method that produced them.
+
+        Raises
+        ------
+        ValueError
+            If method is not "bca" or "percentile".
+
+        References
+        ----------
+        Efron B. Better bootstrap confidence intervals. J Am Stat Assoc. 1987;82(397):171-185.
         """
-        rng = np.random.default_rng(random_state)
-        n = len(self.y_true)
-
-        metrics: dict[str, list[float]] = {
-            k: [] for k in ("sensitivity", "specificity", "ppv", "npv", "f1", "mcc", "accuracy")
-        }
-
-        for _ in range(n_bootstrap):
-            idx = rng.integers(0, n, size=n)
-            result = self._compute_metrics(
-                threshold,
-                (self.y_true[idx] >= threshold).astype(int),
-                (self.y_pred[idx] >= threshold).astype(int),
-            )
-            for key in metrics:
-                metrics[key].append(getattr(result, key))
+        method = method.lower()
+        if method not in ("bca", "percentile"):
+            raise ValueError(f"method must be 'bca' or 'percentile', got {method!r}")
+        scipy_method = "BCa" if method == "bca" else "percentile"
 
         point = self.evaluate(threshold)
-        alpha = (1.0 - confidence) / 2.0
+        data = (self.y_true, self.y_pred)
 
         def _ci(key: str) -> ConfidenceInterval:
-            samples = np.array(metrics[key])
+            estimate = getattr(point, key)
+
+            def _statistic(y_true_sample: np.ndarray, y_pred_sample: np.ndarray) -> float:
+                result = self._compute_metrics(
+                    threshold,
+                    (y_true_sample >= threshold).astype(int),
+                    (y_pred_sample >= threshold).astype(int),
+                )
+                return getattr(result, key)
+
+            # scipy resamples y_true and y_pred together (paired) and rebuilds the metric
+            # distribution. A perfect or degenerate metric produces no variation, so BCa is
+            # undefined and scipy returns nan bounds with a warning. We suppress that warning
+            # and fall back to the point estimate, the correct zero-width interval.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                boot = scipy_bootstrap(
+                    data,
+                    _statistic,
+                    paired=True,
+                    vectorized=False,
+                    n_resamples=n_bootstrap,
+                    confidence_level=confidence,
+                    method=scipy_method,
+                    random_state=random_state,
+                )
+
+            lower = float(boot.confidence_interval.low)
+            upper = float(boot.confidence_interval.high)
+            if not (np.isfinite(lower) and np.isfinite(upper)):
+                lower = upper = float(estimate)
+
             return ConfidenceInterval(
-                estimate=getattr(point, key),
-                lower=float(np.quantile(samples, alpha)),
-                upper=float(np.quantile(samples, 1.0 - alpha)),
+                estimate=estimate,
+                lower=lower,
+                upper=upper,
                 confidence=confidence,
             )
 
@@ -193,6 +239,7 @@ class ThresholdEvaluator:
             threshold=threshold,
             n_bootstrap=n_bootstrap,
             confidence=confidence,
+            method=method,
             sensitivity=_ci("sensitivity"),
             specificity=_ci("specificity"),
             ppv=_ci("ppv"),
@@ -489,7 +536,9 @@ class ThresholdEvaluator:
             Contains the scalar ``ece``, bin-level calibration data
             (``bin_mean_predicted``, ``bin_mean_actual``, ``bin_counts``), and metadata.
             When ``n_samples == 0``, ``ece`` is ``float("nan")`` and bin value arrays
-            contain only ``float("nan")`` entries.
+            contain only ``float("nan")`` entries. ``is_reliable`` is False when the
+            boundary zone averages fewer than 5 samples per bin, where the ECE is too
+            noisy to trust.
 
         Raises
         ------
@@ -557,11 +606,17 @@ class ThresholdEvaluator:
                 if count > 0  # empty bins have nan values, skip rather than propagate nan
             )
 
+        # Rule of thumb from the docstring: the ECE is trustworthy only when the boundary
+        # zone averages at least 5 samples per bin. Flag thin zones so a low ECE from a
+        # sparsely populated boundary is not mistaken for good calibration.
+        is_reliable = n_boundary >= 5 * n_bins
+
         return BoundaryCalibrationResult(
             threshold=threshold,
             window=window,
             n_samples=n_boundary,
             ece=ece,
+            is_reliable=is_reliable,
             bin_edges=[round(float(e), 10) for e in edges],
             bin_centers=[round(float(c), 10) for c in centers],
             bin_mean_predicted=bin_mean_pred,
@@ -620,9 +675,9 @@ class ThresholdEvaluator:
             The cutoff that defines a positive case. ``y_true_bin = y_true >= clinical_threshold``
             is computed once and fixed throughout the sweep. Must lie in [0, 1].
         thresholds : array-like of float or None
-            The pt values to sweep. Each value must be in [0, 1). pt=1.0 is excluded
-            because pt/(1-pt) is undefined there (any model with FPs would have NB=−∞).
-            Values >= 1.0 produce NaN entries in the output.
+            The pt values to sweep. Each value must lie in [0, 1). pt=1.0 and above are
+            rejected with ValueError because pt/(1-pt) diverges there (any model with false
+            positives would have a net benefit of negative infinity).
 
             For TC analysis the range [0.05, 0.50] covers both clinical cutoffs (0.20
             and 0.50) with context on either side. Defaults to np.linspace(0.01, 0.99, 99)
@@ -638,8 +693,9 @@ class ThresholdEvaluator:
         Raises
         ------
         ValueError
-            If ``clinical_threshold`` is not in [0, 1], or if ``y_pred`` contains values
-            outside [0, 1] (it must be a probability for DCA to be meaningful).
+            If ``clinical_threshold`` is not in [0, 1], if any swept ``pt`` is outside
+            [0, 1), or if ``y_pred`` contains values outside [0, 1] (it must be a
+            probability for DCA to be meaningful).
 
         References
         ----------
@@ -665,6 +721,15 @@ class ThresholdEvaluator:
             thresholds = np.linspace(0.01, 0.99, 99)
 
         pts = np.asarray(thresholds, dtype=float)
+        # pt is a probability threshold, so it must lie in [0, 1). pt=1.0 and above make the
+        # harm weight pt/(1-pt) diverge, which has no clinical meaning. Reject loudly rather
+        # than emit NaN, matching the reference dcurves behaviour.
+        if pts.size and (pts.min() < 0.0 or pts.max() >= 1.0):
+            raise ValueError(
+                "decision_curve thresholds (pt) must lie in [0, 1). pt=1.0 and above are "
+                f"undefined because pt/(1-pt) diverges. Observed range: "
+                f"[{pts.min():.4f}, {pts.max():.4f}]."
+            )
         n = len(self.y_true)
 
         # Disease label is fixed for the entire sweep. This is the core DCA invariant.
@@ -675,13 +740,6 @@ class ThresholdEvaluator:
         nb_all: list[float] = []
 
         for pt in pts:
-            # pt/(1−pt) → ∞ at pt≥1.0: NB collapses to −∞ for any model with FPs.
-            # Return NaN so callers can detect and skip these points when plotting.
-            if pt >= 1.0:
-                nb_model.append(float("nan"))
-                nb_all.append(float("nan"))
-                continue
-
             # Classify at this pt. Only y_pred_bin moves, y_true_bin is fixed above.
             y_pred_bin = self.y_pred >= pt
 

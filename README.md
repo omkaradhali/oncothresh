@@ -25,7 +25,7 @@ Continuous oncology AI models (tumor cellularity (TC), Ki-67, TMB, PD-L1) are de
 pip install oncothresh
 ```
 
-Requires Python 3.10+. Core dependencies: `numpy`, `scikit-learn`, `pydantic`. Plotting helpers (forthcoming in v0.1.1) live behind an optional extra: `pip install oncothresh[plotting]`.
+Requires Python 3.10+. Core dependencies: `numpy`, `scipy`, `scikit-learn`, `pydantic`. Plotting helpers (forthcoming in v0.1.1) live behind an optional extra: `pip install oncothresh[plotting]`.
 
 ---
 
@@ -104,17 +104,17 @@ print(ev.bootstrap_ci(threshold=0.20, n_bootstrap=1000, random_state=42))
 ```
 
 ```
-BootstrapResult(threshold=0.20, n=1000, 95% CI)
-  sensitivity : 0.948 (95% CI: 0.923-0.972)
-  specificity : 0.750 (95% CI: 0.682-0.812)
-  ppv         : 0.875 (95% CI: 0.838-0.908)
-  npv         : 0.886 (95% CI: 0.832-0.934)
-  f1          : 0.910 (95% CI: 0.886-0.931)
-  mcc         : 0.728 (95% CI: 0.663-0.789)
-  accuracy    : 0.878 (95% CI: 0.850-0.906)
+BootstrapResult(threshold=0.20, n=1000, 95% CI, method=bca)
+  sensitivity : 0.948 (95% CI: 0.917-0.968)
+  specificity : 0.750 (95% CI: 0.684-0.810)
+  ppv         : 0.875 (95% CI: 0.836-0.905)
+  npv         : 0.886 (95% CI: 0.824-0.932)
+  f1          : 0.910 (95% CI: 0.884-0.929)
+  mcc         : 0.728 (95% CI: 0.665-0.783)
+  accuracy    : 0.878 (95% CI: 0.848-0.904)
 ```
 
-Non-parametric bootstrap with `random_state` for reproducible CI bounds. Use `n_bootstrap=2000` for publication.
+The default method is BCa (bias-corrected and accelerated), the recommended bootstrap interval for skewed metrics like PPV and MCC at small sample sizes. Pass `method="percentile"` for the plain percentile interval. Both come straight from `scipy.stats.bootstrap`. Set `random_state` for reproducible bounds and use `n_bootstrap=2000` for publication.
 
 ### 3. `multi_threshold_report()`: side-by-side at multiple cutoffs
 
@@ -267,7 +267,7 @@ All methods live on `ThresholdEvaluator(y_true, y_pred)` unless noted.
 | Method | Returns | Use when |
 |---|---|---|
 | `evaluate(threshold)` | `ThresholdResult` | You need sensitivity / specificity / PPV / NPV / F1 / MCC / accuracy at one cutoff |
-| `bootstrap_ci(threshold, n_bootstrap=1000, confidence=0.95, random_state=None)` | `BootstrapResult` | You need confidence intervals on every metric |
+| `bootstrap_ci(threshold, n_bootstrap=1000, confidence=0.95, random_state=None, method="bca")` | `BootstrapResult` | You need BCa (default) or percentile confidence intervals on every metric |
 | `multi_threshold_report(thresholds)` | `MultiThresholdReport` | The same model is deployed at more than one cutoff |
 | `nnt(threshold)` | `NNTResult` | You want a clinician-friendly framing: flags per true positive, clearances per missed case |
 | `threshold_sensitivity(threshold, delta=0.05, step=0.01)` | `ThresholdSensitivityResult` | You want to know how fragile performance is to small threshold shifts |
@@ -303,6 +303,7 @@ The basic diagnostic metrics (sensitivity, specificity, PPV, NPV, F1, accuracy) 
 
 - **The clinical-threshold gap and the case for decision-analytic evaluation:** Van Calster et al., *The Lancet Digital Health*, 2025.
 - **Decision Curve Analysis (net benefit):** Vickers and Elkin, *Medical Decision Making*, 2006.
+- **BCa bootstrap confidence intervals:** Efron, *Journal of the American Statistical Association*, 1987.
 - **Matthews correlation coefficient (MCC):** Matthews, *Biochimica et Biophysica Acta*, 1975.
 - **Number Needed to Treat (the basis for NNT):** Laupacis, Sackett, and Roberts, *New England Journal of Medicine*, 1988.
 - **Pathology foundation models in the first application:** UNI (Chen et al., *Nature Medicine*, 2024) and CONCH (Lu et al., *Nature Medicine*, 2024).
@@ -328,7 +329,7 @@ uv run ruff format --check .
 uv run pytest tests/ --cov=src/oncothresh
 ```
 
-CI matrix runs on Python 3.10, 3.11, 3.12, and 3.13 with a 70% coverage gate.
+CI matrix runs on Python 3.10, 3.11, 3.12, and 3.13 with an 85% coverage gate.
 
 ---
 

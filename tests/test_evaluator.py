@@ -61,6 +61,16 @@ def test_list_inputs_converted_to_ndarray():
     assert isinstance(ev.y_pred, np.ndarray)
 
 
+def test_nan_in_y_true_raises():
+    with pytest.raises(ValueError, match="finite"):
+        ThresholdEvaluator(y_true=[0.1, np.nan], y_pred=[0.1, 0.2])
+
+
+def test_inf_in_y_pred_raises():
+    with pytest.raises(ValueError, match="finite"):
+        ThresholdEvaluator(y_true=[0.1, 0.2], y_pred=[0.1, np.inf])
+
+
 # evaluate(): perfect model
 def test_perfect_model_sensitivity_and_specificity():
     ev = _perfect_evaluator()
@@ -220,6 +230,45 @@ def test_bootstrap_ci_str():
     assert "95% CI" in s
 
 
+def test_bootstrap_default_method_is_bca():
+    ev = _known_evaluator()
+    ci = ev.bootstrap_ci(threshold=0.5, n_bootstrap=200, random_state=3)
+    assert ci.method == "bca"
+
+
+def test_bootstrap_percentile_method_selectable():
+    ev = _known_evaluator()
+    ci = ev.bootstrap_ci(threshold=0.5, n_bootstrap=200, random_state=3, method="percentile")
+    assert ci.method == "percentile"
+    for attr in ("sensitivity", "specificity", "ppv", "npv", "f1", "accuracy"):
+        interval = getattr(ci, attr)
+        assert interval.lower <= interval.upper
+
+
+def test_bootstrap_rejects_unknown_method():
+    ev = _known_evaluator()
+    with pytest.raises(ValueError, match="method must be"):
+        ev.bootstrap_ci(threshold=0.5, method="jackknife")
+
+
+def test_bootstrap_perfect_model_degenerate_ci_collapses_to_estimate():
+    """BCa is undefined when a metric never varies (perfect model). The interval then
+    collapses to the point estimate rather than producing nan bounds."""
+    ev = _perfect_evaluator()
+    ci = ev.bootstrap_ci(threshold=0.20, n_bootstrap=200, random_state=0)
+    assert ci.sensitivity.lower == pytest.approx(1.0)
+    assert ci.sensitivity.upper == pytest.approx(1.0)
+    assert ci.sensitivity.estimate == pytest.approx(1.0)
+
+
+def test_bootstrap_result_str_contains_method():
+    ev = _known_evaluator()
+    ci = ev.bootstrap_ci(threshold=0.5, n_bootstrap=100, random_state=1)
+    s = str(ci)
+    assert "BootstrapResult" in s
+    assert "method=bca" in s
+
+
 # multi_threshold_report()
 def test_multi_threshold_report_returns_correct_type():
     ev = _perfect_evaluator()
@@ -372,12 +421,16 @@ def test_decision_curve_nb_all_can_be_negative():
     assert result.prevalence == pytest.approx(0.0)
 
 
-def test_decision_curve_pt_at_or_above_one_returns_nan():
-    """pt >= 1.0 makes pt/(1-pt) undefined, must return NaN, not crash."""
-    result = _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.50, 1.0])
-    assert not np.isnan(result.net_benefit_model[0])
-    assert np.isnan(result.net_benefit_model[1])
-    assert np.isnan(result.net_benefit_all[1])
+def test_decision_curve_rejects_pt_at_or_above_one():
+    """pt >= 1.0 makes pt/(1-pt) diverge, so it is rejected rather than returning NaN."""
+    with pytest.raises(ValueError, match=r"must lie in \[0, 1\)"):
+        _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.50, 1.0])
+
+
+def test_decision_curve_rejects_negative_pt():
+    """A negative probability threshold is invalid."""
+    with pytest.raises(ValueError, match=r"must lie in \[0, 1\)"):
+        _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[-0.1, 0.5])
 
 
 def test_decision_curve_perfect_model_beats_treat_all():
@@ -569,6 +622,13 @@ def test_threshold_sensitivity_result_is_frozen():
         result.thresholds = [0.5]  # type: ignore[misc]
 
 
+def test_threshold_sensitivity_str_summarizes_sweep():
+    result = _known_evaluator().threshold_sensitivity(threshold=0.5, delta=0.05, step=0.01)
+    s = str(result)
+    assert "ThresholdSensitivityResult" in s
+    assert "nominal=0.50" in s
+
+
 # boundary_calibration()
 #
 # Boundary-weighted ECE inside [threshold - window, threshold + window]. With a
@@ -638,6 +698,32 @@ def test_boundary_calibration_result_is_frozen():
     result = _boundary_eval_perfect().boundary_calibration(threshold=0.20)
     with pytest.raises(ValidationError):
         result.ece = 0.5  # type: ignore[misc]
+
+
+def test_boundary_calibration_is_reliable_true_when_well_populated():
+    """100 samples over 5 bins (average 20 per bin) clears the >= 5 per bin rule."""
+    y = np.linspace(0.10, 0.30, 100)
+    ev = ThresholdEvaluator(y_true=y, y_pred=y.copy())
+    result = ev.boundary_calibration(threshold=0.20, window=0.10, n_bins=5)
+    assert result.n_samples == 100
+    assert result.is_reliable is True
+    assert "sparse" not in str(result)
+
+
+def test_boundary_calibration_is_reliable_false_when_sparse():
+    """8 samples over 5 bins falls below the >= 5 per bin rule, so is_reliable is False."""
+    y = np.linspace(0.12, 0.28, 8)
+    ev = ThresholdEvaluator(y_true=y, y_pred=y.copy())
+    result = ev.boundary_calibration(threshold=0.20, window=0.10, n_bins=5)
+    assert result.is_reliable is False
+    assert "sparse boundary zone" in str(result)
+
+
+def test_boundary_calibration_empty_zone_str():
+    y = np.array([0.80, 0.85, 0.90, 0.95])
+    ev = ThresholdEvaluator(y_true=y, y_pred=y.copy())
+    result = ev.boundary_calibration(threshold=0.20, window=0.05, n_bins=5)
+    assert "no boundary samples" in str(result)
 
 
 # compare_models()
@@ -734,6 +820,14 @@ def test_compare_models_too_few_evaluators_raises():
 def test_compare_models_empty_evaluators_raises():
     with pytest.raises(ValueError, match="at least 2"):
         compare_models([], threshold=0.5)
+
+
+def test_compare_models_rejects_mismatched_cohorts():
+    """Evaluators scored on different-size test sets cannot be compared head-to-head."""
+    ev_a = _perfect_evaluator(n=100)
+    ev_b = _known_evaluator()  # n=6
+    with pytest.raises(ValueError, match="same test set"):
+        compare_models([ev_a, ev_b], threshold=0.5)
 
 
 def test_compare_models_name_length_mismatch_raises():

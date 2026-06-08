@@ -35,7 +35,8 @@ ground-truth scores and model predictions, a stateful `ThresholdEvaluator` works
 at one or more clinical thresholds and returns:
 
 - standard classification metrics (sensitivity, specificity, PPV, NPV, F1, MCC,
-  accuracy) with non-parametric bootstrap confidence intervals,
+  accuracy) with bias-corrected and accelerated (BCa) bootstrap confidence
+  intervals [@efron1987],
 - Number-Needed-to-Test (NNT),
 - threshold-sensitivity curves that quantify how fragile performance is to small
   shifts in the cutoff,
@@ -101,9 +102,10 @@ global calibration number hides.
 methodological artefact. Its first application is a benchmark of pathology
 foundation models (UNI [@uni2024], CONCH [@conch2024]) for automated tumor
 cellularity assessment, where it provides the clinical-threshold analysis at the
-20% and 50% TC cutoffs. It is built on `numpy` [@numpy] and `scikit-learn`
-[@scikit-learn], with `pydantic` for validated, serialisable result objects, and
-supports Python 3.10 to 3.13 to remain compatible with hospital IT environments.
+20% and 50% TC cutoffs. It is built on `numpy` [@numpy], `scipy` [@scipy], and
+`scikit-learn` [@scikit-learn], with `pydantic` for validated, serialisable result
+objects, and supports Python 3.10 to 3.13 to remain compatible with hospital IT
+environments.
 
 # Acknowledgements
 

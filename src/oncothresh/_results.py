@@ -109,6 +109,11 @@ class BootstrapResult(BaseModel):
     confidence: float = Field(
         description="Confidence level used for all intervals (e.g. 0.95 for 95% CI)."
     )
+    method: str = Field(
+        description=(
+            "Interval method used: 'bca' (bias-corrected and accelerated) or 'percentile'."
+        )
+    )
     sensitivity: ConfidenceInterval = Field(description="Bootstrap CI for sensitivity.")
     specificity: ConfidenceInterval = Field(description="Bootstrap CI for specificity.")
     ppv: ConfidenceInterval = Field(
@@ -123,7 +128,10 @@ class BootstrapResult(BaseModel):
 
     def __str__(self) -> str:
         pct = int(self.confidence * 100)
-        header = f"BootstrapResult(threshold={self.threshold:.2f}, n={self.n_bootstrap}, {pct}% CI)"
+        header = (
+            f"BootstrapResult(threshold={self.threshold:.2f}, n={self.n_bootstrap}, "
+            f"{pct}% CI, method={self.method})"
+        )
         rows = (
             f"  sensitivity : {self.sensitivity}",
             f"  specificity : {self.specificity}",
@@ -458,6 +466,12 @@ class BoundaryCalibrationResult(BaseModel):
             "In the same units as the scores (0.03 = 3 percentage points of error)."
         )
     )
+    is_reliable: bool = Field(
+        description=(
+            "True when the boundary zone averages at least 5 samples per bin. False flags a "
+            "sparsely populated zone where the ECE is too noisy to trust, even if it is low."
+        )
+    )
     bin_edges: list[float] = Field(
         description=(
             "n_bins + 1 values defining the bin boundaries within the boundary zone. "
@@ -488,13 +502,14 @@ class BoundaryCalibrationResult(BaseModel):
         lo = self.bin_edges[0] if self.bin_edges else float("nan")
         hi = self.bin_edges[-1] if self.bin_edges else float("nan")
         ece_str = "nan (no boundary samples)" if self.n_samples == 0 else f"{self.ece:.4f}"
+        sparse = "" if self.is_reliable else " [sparse boundary zone, ECE unreliable]"
         return (
             f"BoundaryCalibrationResult("
             f"threshold={self.threshold:.2f}, "
             f"window={self.window:.2f}, "
             f"zone=[{lo:.2f}-{hi:.2f}], "
             f"n_samples={self.n_samples}, "
-            f"ece={ece_str})"
+            f"ece={ece_str}){sparse}"
         )
 
 

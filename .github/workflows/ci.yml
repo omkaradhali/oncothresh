@@ -41,4 +41,4 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Test with coverage
-        run: uv run pytest tests/ -v --cov=src/oncothresh --cov-report=term-missing --cov-fail-under=70
+        run: uv run pytest tests/ -v --cov=src/oncothresh --cov-report=term-missing --cov-fail-under=85
