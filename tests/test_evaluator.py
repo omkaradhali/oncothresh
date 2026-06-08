@@ -61,7 +61,7 @@ def test_list_inputs_converted_to_ndarray():
     assert isinstance(ev.y_pred, np.ndarray)
 
 
-# evaluate() — perfect model
+# evaluate(): perfect model
 def test_perfect_model_sensitivity_and_specificity():
     ev = _perfect_evaluator()
     result = ev.evaluate(threshold=0.20)
@@ -82,7 +82,7 @@ def test_perfect_model_accuracy():
     assert result.accuracy == pytest.approx(1.0)
 
 
-# evaluate() — known case
+# evaluate(): known case
 def test_known_case_sensitivity():
     # TP=2, FN=1 → sensitivity=2/3
     result = _known_evaluator().evaluate(threshold=0.5)
@@ -131,9 +131,9 @@ def test_result_str_contains_threshold():
     assert "0.50" in str(result)
 
 
-# evaluate() — edge cases
+# evaluate(): edge cases
 def test_all_predicted_negative_sensitivity_is_zero():
-    """Model always predicts 0 — sensitivity must be 0, specificity 1."""
+    """Model always predicts 0, sensitivity must be 0, specificity 1."""
     y_true = [0.1, 0.9, 0.8, 0.2]
     y_pred = [0.0, 0.0, 0.0, 0.0]
     ev = ThresholdEvaluator(y_true=y_true, y_pred=y_pred)
@@ -158,7 +158,6 @@ def test_zero_division_ppv_returns_zero():
     assert result.ppv == pytest.approx(0.0)
 
 
-@pytest.mark.filterwarnings("ignore::UserWarning")
 def test_threshold_at_boundary():
     """Samples exactly at threshold count as positive (>=)."""
     ev = ThresholdEvaluator(y_true=[0.5, 0.5], y_pred=[0.5, 0.5])
@@ -272,7 +271,7 @@ def test_multi_threshold_empty_raises():
 
 
 def _dca_evaluator() -> ThresholdEvaluator:
-    """Perfect calibration on 4 samples — gives clean, hand-verifiable NB values."""
+    """Perfect calibration on 4 samples, gives clean, hand-verifiable NB values."""
     y = [0.1, 0.2, 0.8, 0.9]
     return ThresholdEvaluator(y_true=y, y_pred=y)
 
@@ -315,7 +314,7 @@ def test_decision_curve_clinical_threshold_stored():
 
 
 def test_decision_curve_prevalence_fixed_across_sweep():
-    """prevalence is derived once from clinical_threshold — does not move with pt."""
+    """prevalence is derived once from clinical_threshold, does not move with pt."""
     result = _dca_evaluator().decision_curve(
         clinical_threshold=0.5, thresholds=[0.10, 0.20, 0.50, 0.80]
     )
@@ -374,7 +373,7 @@ def test_decision_curve_nb_all_can_be_negative():
 
 
 def test_decision_curve_pt_at_or_above_one_returns_nan():
-    """pt >= 1.0 makes pt/(1-pt) undefined — must return NaN, not crash."""
+    """pt >= 1.0 makes pt/(1-pt) undefined, must return NaN, not crash."""
     result = _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.50, 1.0])
     assert not np.isnan(result.net_benefit_model[0])
     assert np.isnan(result.net_benefit_model[1])
@@ -425,7 +424,7 @@ def test_decision_curve_rejects_y_pred_outside_unit_interval():
 # nnt()
 #
 # Reuses _known_evaluator (TP=2, FP=1, FN=1, TN=2 at threshold=0.5 → PPV=NPV=2/3).
-# nnt_positive = 1/PPV = 1.5; nnt_negative = 1/(1-NPV) = 3.0.
+# nnt_positive = 1/PPV = 1.5. nnt_negative = 1/(1-NPV) = 3.0.
 
 
 def test_nnt_returns_correct_type():
@@ -462,7 +461,7 @@ def test_nnt_perfect_model_returns_inf_negative():
 
 def test_nnt_zero_ppv_returns_inf_positive():
     """PPV=0 means every flag is wrong → nnt_positive = inf (clinical meaning is clear)."""
-    # All flagged samples are true negatives; no true positives flagged.
+    # All flagged samples are true negatives. No true positives flagged.
     ev = ThresholdEvaluator(
         y_true=[0.1, 0.2, 0.8, 0.9],
         y_pred=[0.9, 0.8, 0.2, 0.1],  # inverted predictions
@@ -605,8 +604,8 @@ def test_boundary_calibration_biased_model_ece_positive():
 
 def test_boundary_calibration_excludes_predictions_outside_window():
     """Samples outside [threshold ± window] must not contribute to ECE."""
-    # 10 samples inside [0.10, 0.30] perfectly calibrated; 10 samples outside the
-    # window with large bias — the ECE should still come out as 0.0 because
+    # 10 samples inside [0.10, 0.30] perfectly calibrated. 10 samples outside the
+    # window with large bias, the ECE should still come out as 0.0 because
     # boundary_calibration filters by y_pred ∈ [threshold ± window].
     y_in = np.linspace(0.12, 0.28, 10)
     y_out = np.array([0.50, 0.60, 0.70, 0.80, 0.90, 0.05, 0.04, 0.03, 0.02, 0.01])
@@ -643,36 +642,45 @@ def test_boundary_calibration_result_is_frozen():
 
 # compare_models()
 #
-# Two evaluators used throughout:
-#   ev_perfect: y_pred == y_true → all metrics = 1.0 at threshold=0.5
-#   ev_known:   known confusion matrix at threshold=0.5:
-#               TP=2, FP=1, FN=1, TN=2 → sensitivity=specificity=ppv=npv=2/3
+# compare_models requires every evaluator to share one test set (equal-length y_true),
+# so both fixtures below are built from the same 6-sample cohort:
+#   perfect: y_pred == y_true, all metrics = 1.0 at threshold=0.5
+#   known:   TP=2, FP=1, FN=1, TN=2 at threshold=0.5 -> sensitivity=specificity=ppv=npv=2/3
+
+
+def _compare_pair() -> tuple[ThresholdEvaluator, ThresholdEvaluator]:
+    """A perfect model and the known 2/3 model on the same 6-sample cohort."""
+    y_true = [0.8, 0.9, 0.1, 0.2, 0.7, 0.3]
+    y_pred_known = [0.8, 0.2, 0.1, 0.9, 0.7, 0.3]
+    perfect = ThresholdEvaluator(y_true=y_true, y_pred=list(y_true))
+    known = ThresholdEvaluator(y_true=y_true, y_pred=y_pred_known)
+    return perfect, known
 
 
 def test_compare_models_returns_correct_type():
-    result = compare_models([_perfect_evaluator(), _known_evaluator()], threshold=0.5)
+    result = compare_models(list(_compare_pair()), threshold=0.5)
     assert isinstance(result, CompareModelsResult)
 
 
 def test_compare_models_result_count_matches_evaluators():
-    result = compare_models([_perfect_evaluator(), _known_evaluator()], threshold=0.5)
+    result = compare_models(list(_compare_pair()), threshold=0.5)
     assert len(result.results) == 2
     assert len(result.model_names) == 2
 
 
 def test_compare_models_threshold_stored():
-    result = compare_models([_perfect_evaluator(), _known_evaluator()], threshold=0.5)
+    result = compare_models(list(_compare_pair()), threshold=0.5)
     assert result.threshold == pytest.approx(0.5)
 
 
 def test_compare_models_default_names():
-    result = compare_models([_perfect_evaluator(), _known_evaluator()], threshold=0.5)
+    result = compare_models(list(_compare_pair()), threshold=0.5)
     assert result.model_names == ["Model 1", "Model 2"]
 
 
 def test_compare_models_custom_names():
     result = compare_models(
-        [_perfect_evaluator(), _known_evaluator()],
+        list(_compare_pair()),
         threshold=0.5,
         model_names=["UNI", "CONCH"],
     )
@@ -681,8 +689,7 @@ def test_compare_models_custom_names():
 
 def test_compare_models_metrics_match_individual_evaluate():
     """Each model's metrics in CompareModelsResult must equal evaluate() called directly."""
-    ev1 = _perfect_evaluator()
-    ev2 = _known_evaluator()
+    ev1, ev2 = _compare_pair()
     direct1 = ev1.evaluate(threshold=0.5)
     direct2 = ev2.evaluate(threshold=0.5)
 
@@ -711,8 +718,7 @@ def test_compare_models_three_models():
 
 def test_compare_models_results_order_preserved():
     """Results must appear in the same order as the evaluators list."""
-    ev_perfect = _perfect_evaluator()
-    ev_known = _known_evaluator()
+    ev_perfect, ev_known = _compare_pair()
     result = compare_models([ev_perfect, ev_known], threshold=0.5)
 
     # Perfect model: sensitivity=1.0. Known model: sensitivity=2/3.
@@ -733,21 +739,21 @@ def test_compare_models_empty_evaluators_raises():
 def test_compare_models_name_length_mismatch_raises():
     with pytest.raises(ValueError, match="model_names length"):
         compare_models(
-            [_perfect_evaluator(), _known_evaluator()],
+            list(_compare_pair()),
             threshold=0.5,
             model_names=["Only One"],
         )
 
 
 def test_compare_models_result_is_frozen():
-    result = compare_models([_perfect_evaluator(), _known_evaluator()], threshold=0.5)
+    result = compare_models(list(_compare_pair()), threshold=0.5)
     with pytest.raises(ValidationError):
         result.threshold = 0.99  # type: ignore[misc]
 
 
 def test_compare_models_str_contains_model_names():
     result = compare_models(
-        [_perfect_evaluator(), _known_evaluator()],
+        list(_compare_pair()),
         threshold=0.5,
         model_names=["UNI", "CONCH"],
     )
@@ -757,10 +763,10 @@ def test_compare_models_str_contains_model_names():
 
 
 def test_compare_models_str_contains_threshold():
-    result = compare_models([_perfect_evaluator(), _known_evaluator()], threshold=0.5)
+    result = compare_models(list(_compare_pair()), threshold=0.5)
     assert "0.50" in str(result)
 
 
 def test_compare_models_str_contains_n_models():
-    result = compare_models([_perfect_evaluator(), _known_evaluator()], threshold=0.5)
+    result = compare_models(list(_compare_pair()), threshold=0.5)
     assert "n_models=2" in str(result)

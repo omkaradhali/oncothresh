@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
-from sklearn.metrics import confusion_matrix, matthews_corrcoef
+from sklearn.metrics import confusion_matrix
 
 from oncothresh._results import (
     BootstrapResult,
@@ -77,6 +79,14 @@ class ThresholdEvaluator:
             raise ValueError("y_true and y_pred must be 1-D arrays")
         if len(self.y_true) < 2:
             raise ValueError("At least 2 samples are required")
+        # Reject NaN and inf at construction. A NaN prediction would otherwise pass
+        # silently: NaN >= threshold evaluates to False, so the sample would be scored
+        # as a confident negative rather than flagged. For a clinical evaluation tool a
+        # corrupt or missing value must fail loudly, not skew a metric without warning.
+        if not np.all(np.isfinite(self.y_true)):
+            raise ValueError("y_true contains NaN or inf, all scores must be finite")
+        if not np.all(np.isfinite(self.y_pred)):
+            raise ValueError("y_pred contains NaN or inf, all predictions must be finite")
 
     def evaluate(self, threshold: float) -> ThresholdResult:
         """
@@ -95,7 +105,8 @@ class ThresholdEvaluator:
         ThresholdResult
         """
 
-        # Classification metrics require binary labels; threshold converts continuous scores to 0/1.
+        # Classification metrics require binary labels. The threshold converts continuous
+        # scores to 0/1.
         y_true_bin, y_pred_bin = self._binarize(threshold)
 
         evaluation_result = self._compute_metrics(threshold, y_true_bin, y_pred_bin)
@@ -126,8 +137,9 @@ class ThresholdEvaluator:
           4. Report the point estimate from the full original dataset alongside the interval.
 
         Interpreting the result:
-          - Tight CI (e.g. 0.857, 95% CI: 0.831-0.881) → stable, reliable estimate.
-          - Wide CI  (e.g. 0.857, 95% CI: 0.42-0.99)   → dataset too small to trust the number.
+          - Tight CI (e.g. 0.857, 95% CI: 0.831-0.881) means a stable, reliable estimate.
+          - Wide CI  (e.g. 0.857, 95% CI: 0.42-0.99) means the dataset is too small to trust
+            the number.
           - Reviewers and clinicians use the CI width to judge whether results are real or a
             fluke of sample size. Always report CIs in publications.
 
@@ -136,12 +148,12 @@ class ThresholdEvaluator:
         threshold : float
             Clinical cutoff value.
         n_bootstrap : int
-            Number of bootstrap resamples. 1000 is standard; use 2000 for publication.
+            Number of bootstrap resamples. 1000 is standard. Use 2000 for publication.
         confidence : float
             Confidence level, default 0.95 (95% CI). Use 0.99 for a stricter 99% CI.
         random_state : int | None
             Seed for reproducibility. Set this to a fixed integer (e.g. 42) to get the
-            same CI bounds across runs — required for reproducible published results.
+            same CI bounds across runs, which is required for reproducible published results.
 
         Returns
         -------
@@ -195,7 +207,7 @@ class ThresholdEvaluator:
         Evaluate at multiple clinical cutoffs and return a side-by-side report.
 
         Runs evaluate() at each threshold and bundles results into a single
-        MultiThresholdReport. Purely orchestration — no computation happens here.
+        MultiThresholdReport. Purely orchestration, no computation happens here.
         For TC scoring the standard cutoffs are [0.20, 0.50] (NGS eligibility
         and treatment response).
 
@@ -224,26 +236,26 @@ class ThresholdEvaluator:
         Compute the Number Needed to Test (NNT) at a clinical decision threshold.
 
         NNT answers the question clinicians ask in practice: "Given the model's behaviour
-        at this threshold, how many patients do I need to act on to find one true case —
+        at this threshold, how many patients do I need to act on to find one true case,
         and how many cleared patients might be hiding a missed case?"
 
         Two values are returned:
 
-        **nnt_positive** — efficiency of a positive call
+        **nnt_positive** (efficiency of a positive call)
             Derived from PPV (positive predictive value).
             Formula: 1 / PPV
             Interpretation: on average, ``nnt_positive`` model-positive patients need to
             be tested before one true positive is found. A value of 2.0 means every
-            second flagged patient is a true case; a value of 10.0 means 9 out of 10
+            second flagged patient is a true case. A value of 10.0 means 9 out of 10
             flagged patients are unnecessary referrals.
 
-        **nnt_negative** — safety of a negative call
+        **nnt_negative** (safety of a negative call)
             Derived from NPV (negative predictive value).
             Formula: 1 / (1 - NPV)
             Interpretation: on average, ``nnt_negative`` model-negative patients are
             cleared before one missed true positive is encountered. A value of 100 means
-            1 in 100 cleared patients is actually a missed case — low risk. A value of 5
-            means 1 in 5 clearances conceals a true positive — high risk.
+            1 in 100 cleared patients is actually a missed case, which is low risk. A value
+            of 5 means 1 in 5 clearances conceals a true positive, which is high risk.
 
         Infinite values are valid and carry clinical meaning:
             - ``nnt_positive = inf`` when PPV = 0: the model never flags a true positive,
@@ -251,7 +263,7 @@ class ThresholdEvaluator:
             - ``nnt_negative = inf`` when NPV = 1: the model never misses a true positive,
               so there are no missed cases among cleared patients.
 
-        This method calls ``evaluate()`` internally — no extra computation is performed
+        This method calls ``evaluate()`` internally. No extra computation is performed
         beyond what ``evaluate()`` already does.
 
         Parameters
@@ -274,9 +286,9 @@ class ThresholdEvaluator:
         """
         result = self.evaluate(threshold)
 
-        # PPV = 0 means every flag is a false alarm: 1/0 is mathematically undefined,
-        # but the clinical interpretation is clear — you will never find a true positive
-        # by acting on this model's positive calls. inf is the correct answer.
+        # PPV = 0 means every flag is a false alarm. 1/0 is mathematically undefined, but
+        # the clinical interpretation is clear: you will never find a true positive by
+        # acting on this model's positive calls. inf is the correct answer.
         nnt_positive = (1.0 / result.ppv) if result.ppv > 0 else float("inf")
 
         # 1 − NPV is the rate of missed cases among cleared patients.
@@ -308,7 +320,7 @@ class ThresholdEvaluator:
         A brief note on naming: "threshold sensitivity analysis" is a term from statistics
         and engineering meaning "how sensitive is this result to a change in the threshold
         parameter?" It does not refer to clinical sensitivity (the true positive rate).
-        Both meanings appear here — the method name describes the analysis technique,
+        Both meanings appear here. The method name describes the analysis technique,
         while the ``sensitivities`` field in the result holds the clinical metric.
 
         What this method does:
@@ -324,14 +336,14 @@ class ThresholdEvaluator:
             our lab uses 18% instead of 20%, how much does the model's sensitivity change?
             Are we putting patients at risk?"
 
-            If the curves are steep near the nominal threshold, the model is fragile — it
+            If the curves are steep near the nominal threshold, the model is fragile. It
             was tuned specifically to that cutoff and will not transfer safely. If the
             curves are flat, the model is robust across reasonable clinical variation.
 
             Typical interpretation for TC scoring:
                 - ≤3% sensitivity drop over ±5% shift: robust, safe to deploy
                 - 5-10% drop: moderate fragility, document the exact cutoff used
-                - >10% drop: the model is threshold-brittle — report results across
+                - >10% drop: the model is threshold-brittle, report results across
                   a range of thresholds rather than a single point
 
         Parameters
@@ -344,7 +356,7 @@ class ThresholdEvaluator:
             Default 0.05 covers ±5%, which spans the typical lab-to-lab variation
             for TC thresholds.
         step : float
-            Resolution of the sweep — distance between consecutive threshold values.
+            Resolution of the sweep, the distance between consecutive threshold values.
             Default 0.01 (1%) gives 11 evaluation points over the default ±5% range,
             which is granular enough for plotting and clinical reporting.
             Use 0.005 (0.5%) for publication-quality figures.
@@ -367,10 +379,10 @@ class ThresholdEvaluator:
             raise ValueError(f"step must be positive, got {step}")
 
         # Build the sweep grid at the requested step size, then filter to [0, 1].
-        # Earlier versions clamped lo/hi into [0, 1] *before* linspace; with a fixed
+        # Earlier versions clamped lo/hi into [0, 1] *before* linspace. With a fixed
         # n_steps over a shortened range this silently compressed the step size when
-        # the window hit a boundary (e.g. threshold=0.02, delta=0.05 → linspace step
-        # 0.007 instead of the requested 0.01).
+        # the window hit a boundary (e.g. threshold=0.02, delta=0.05 gave a linspace step
+        # of 0.007 instead of the requested 0.01).
         #
         # Integer offsets times `step` keep the grid floating-point exact: every entry
         # is a true multiple of `step` away from `threshold`, regardless of how many
@@ -424,7 +436,7 @@ class ThresholdEvaluator:
         may still be systematically biased near the exact cutoff that determines whether a
         patient receives NGS testing, chemotherapy, or an immunotherapy agent.
 
-        This method focuses exclusively on the *boundary zone* — predictions that fall
+        This method focuses exclusively on the *boundary zone*, the predictions that fall
         within ``window`` of ``threshold``. Those are the close-call samples where a
         calibration error most directly changes a treatment decision.
 
@@ -443,20 +455,20 @@ class ThresholdEvaluator:
                Empty bins are skipped (contribute 0 weight to ECE).
 
         Choosing ``window``:
-            The window should span the clinical uncertainty range — the zone where a
+            The window should span the clinical uncertainty range, the zone where a
             real prediction could plausibly be on either side of the threshold.
             - TC 20% threshold: window=0.10 captures predictions from 10% to 30%, which
               includes cases a pathologist might read as borderline.
-            - Tighter window (0.05): focuses on the sharpest close-calls; requires more
+            - Tighter window (0.05): focuses on the sharpest close-calls, but requires more
               data to populate bins reliably.
             - Wider window (0.15): more samples, smoother bins, but includes predictions
               that are not truly on the boundary.
 
         Choosing ``n_bins``:
-            Fewer bins (5) are more stable with small datasets — each bin has more samples,
-            so mean values are reliable. More bins (10-20) give a finer-grained reliability
-            diagram but need proportionally more boundary samples to avoid empty bins.
-            Rule of thumb: aim for at least 5 samples per bin on average
+            Fewer bins (5) are more stable with small datasets, because each bin has more
+            samples, so mean values are reliable. More bins (10-20) give a finer-grained
+            reliability diagram but need proportionally more boundary samples to avoid empty
+            bins. Rule of thumb: aim for at least 5 samples per bin on average
             (n_samples / n_bins ≥ 5).
 
         Parameters
@@ -494,10 +506,10 @@ class ThresholdEvaluator:
         hi = min(1.0, threshold + window)
 
         # Select only predictions that fall in the boundary zone.
-        # We use the predicted score (y_pred) as the filter criterion — not y_true —
-        # because the model's decision is based on what it predicts, not the true label.
+        # We use the predicted score (y_pred) as the filter criterion, not y_true, because
+        # the model's decision is based on what it predicts, not the true label.
         # A sample with y_true=0.35 but y_pred=0.45 is not a boundary case for the
-        # 20% threshold; the model confidently called it positive.
+        # 20% threshold. The model confidently called it positive.
         boundary_mask = (self.y_pred >= lo) & (self.y_pred <= hi)
         n_boundary = int(boundary_mask.sum())
 
@@ -529,20 +541,20 @@ class ThresholdEvaluator:
                 bin_mean_pred.append(float(y_pred_b[in_bin].mean()))
                 bin_mean_true.append(float(y_true_b[in_bin].mean()))
             else:
-                # Empty bins contribute nothing to ECE; store nan so callers can
+                # Empty bins contribute nothing to ECE. Store nan so callers can
                 # distinguish "empty bin" from "perfectly calibrated bin" in plots.
                 bin_mean_pred.append(float("nan"))
                 bin_mean_true.append(float("nan"))
 
         # Compute ECE: weighted average of |mean_pred - mean_true| across non-empty bins.
         if n_boundary == 0:
-            # No predictions fell near this threshold — ECE is undefined, not zero.
+            # No predictions fell near this threshold, so ECE is undefined, not zero.
             ece = float("nan")
         else:
             ece = sum(
                 (count / n_boundary) * abs(mp - mt)
                 for count, mp, mt in zip(bin_counts, bin_mean_pred, bin_mean_true, strict=True)
-                if count > 0  # empty bins have nan values; skip rather than propagate nan
+                if count > 0  # empty bins have nan values, skip rather than propagate nan
             )
 
         return BoundaryCalibrationResult(
@@ -565,7 +577,7 @@ class ThresholdEvaluator:
         """
         Compute Decision Curve Analysis (DCA) for a fixed clinical decision.
 
-        Why DCA? Standard metrics (sensitivity, specificity, AUC) measure discrimination —
+        Why DCA? Standard metrics (sensitivity, specificity, AUC) measure discrimination,
         how well the model separates positives from negatives. They cannot answer: "Is using
         this model to guide clinical decisions actually better than a simpler policy?" DCA
         answers that question by computing net benefit across the range of harm trade-offs
@@ -573,15 +585,15 @@ class ThresholdEvaluator:
 
         How this method interprets its inputs:
 
-        - ``clinical_threshold`` defines what counts as "disease" — the disease label is
+        - ``clinical_threshold`` defines what counts as "disease". The disease label is
           fixed once as ``y_true >= clinical_threshold`` and does not move during the sweep.
           For TC at the NGS-eligibility cutoff: clinical_threshold=0.20.
         - ``y_pred`` is interpreted as the model's predicted probability that the patient
           is positive under that definition, i.e. P(y_true >= clinical_threshold). It must
           lie in [0, 1]. If your model outputs a raw biomarker score, calibrate it to a
-          probability (Platt / isotonic) before calling this method.
-        - ``thresholds`` (the pt grid) sweeps the clinician's intervention threshold —
-          the probability of disease at which they would act. At each pt the model
+          probability (Platt or isotonic) before calling this method.
+        - ``thresholds`` (the pt grid) sweeps the clinician's intervention threshold, the
+          probability of disease at which they would act. At each pt the model
           classifies a patient as positive iff ``y_pred >= pt``.
 
         At each pt three strategies are compared::
@@ -592,7 +604,7 @@ class ThresholdEvaluator:
 
         ``prevalence`` is fixed (derived from ``clinical_threshold``) and so is ``treat all``
         at any given pt. The model adds clinical value wherever its net benefit exceeds both
-        treat-all and zero. Negative net benefit means the strategy causes net harm — this
+        treat-all and zero. Negative net benefit means the strategy causes net harm. This
         is valid and should not be clipped.
 
         Interpreting the curves:
@@ -608,7 +620,7 @@ class ThresholdEvaluator:
             The cutoff that defines a positive case. ``y_true_bin = y_true >= clinical_threshold``
             is computed once and fixed throughout the sweep. Must lie in [0, 1].
         thresholds : array-like of float or None
-            The pt values to sweep. Each value must be in [0, 1); pt=1.0 is excluded
+            The pt values to sweep. Each value must be in [0, 1). pt=1.0 is excluded
             because pt/(1-pt) is undefined there (any model with FPs would have NB=−∞).
             Values >= 1.0 produce NaN entries in the output.
 
@@ -648,14 +660,14 @@ class ThresholdEvaluator:
             )
 
         if thresholds is None:
-            # 99 evenly-spaced points from 1% to 99% — fine-grained enough for smooth plots,
+            # 99 evenly-spaced points from 1% to 99%, fine-grained enough for smooth plots,
             # excludes 0 (trivial: everyone is positive) and 1 (undefined: pt/(1−pt) → ∞).
             thresholds = np.linspace(0.01, 0.99, 99)
 
         pts = np.asarray(thresholds, dtype=float)
         n = len(self.y_true)
 
-        # Disease label is fixed for the entire sweep — this is the core DCA invariant.
+        # Disease label is fixed for the entire sweep. This is the core DCA invariant.
         y_true_bin = self.y_true >= clinical_threshold
         prevalence = float(y_true_bin.mean())
 
@@ -670,7 +682,7 @@ class ThresholdEvaluator:
                 nb_all.append(float("nan"))
                 continue
 
-            # Classify at this pt — only y_pred_bin moves; y_true_bin is fixed above.
+            # Classify at this pt. Only y_pred_bin moves, y_true_bin is fixed above.
             y_pred_bin = self.y_pred >= pt
 
             # TP: model flags positive AND truly positive (under clinical_threshold).
@@ -717,21 +729,34 @@ class ThresholdEvaluator:
         """
         # Build 2x2 confusion matrix and unpack into tn/fp/fn/tp. labels=[0,1] forces
         # a full 2x2 even when a bootstrap resample accidentally contains only positives
-        # or only negatives — without it sklearn returns a 1x1 and the unpacking crashes.
+        # or only negatives. Without it sklearn returns a 1x1 and the unpacking crashes.
         # Ref: https://scikit-learn.org/stable/modules/generated/sklearn.metrics.confusion_matrix.html
-        tn, fp, fn, tp = confusion_matrix(y_true_bin, y_pred_bin, labels=[0, 1]).ravel()
+        # Cast to Python int so the MCC product below cannot overflow on large samples.
+        tn, fp, fn, tp = (
+            int(c) for c in confusion_matrix(y_true_bin, y_pred_bin, labels=[0, 1]).ravel()
+        )
 
         sensitivity = self._safe_divide(tp, tp + fn)
         specificity = self._safe_divide(tn, tn + fp)
         ppv = self._safe_divide(tp, tp + fp)
         npv = self._safe_divide(tn, tn + fn)
         f1 = self._safe_divide(2 * ppv * sensitivity, ppv + sensitivity)
-        mcc = float(matthews_corrcoef(y_true_bin, y_pred_bin))
+
+        # MCC derived directly from the four counts rather than via sklearn's
+        # matthews_corrcoef. That function recomputes its own confusion matrix without
+        # labels=[0,1], so on a degenerate input (e.g. an all-positive bootstrap
+        # resample) it emits a "single label was found" UserWarning. Computing it here
+        # avoids both that warning and a redundant second pass. The zero-denominator
+        # convention (return 0.0) matches sklearn exactly.
+        mcc_numerator = tp * tn - fp * fn
+        mcc_denominator = math.sqrt((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+        mcc = mcc_numerator / mcc_denominator if mcc_denominator != 0 else 0.0
+
         accuracy = self._safe_divide(tp + tn, tp + tn + fp + fn)
 
-        n_total = int(tp + tn + fp + fn)
-        n_positive = int(tp + fn)
-        n_negative = int(tn + fp)
+        n_total = tp + tn + fp + fn
+        n_positive = tp + fn
+        n_negative = tn + fp
 
         return ThresholdResult(
             threshold=threshold,
@@ -768,9 +793,10 @@ def compare_models(
     Parameters
     ----------
     evaluators : list[ThresholdEvaluator]
-        Two or more ThresholdEvaluator instances, one per model to compare.
-        Each may have different y_true/y_pred arrays (e.g. different model architectures
-        evaluated on the same test set — pass the same y_true to each but different y_pred).
+        Two or more ThresholdEvaluator instances, one per model to compare. All must be
+        scored on the same test set, so they share an equal-length y_true (e.g. different
+        model architectures evaluated on the same cohort: pass the same y_true to each but
+        a different y_pred).
     threshold : float
         The clinical cutoff at which all models are evaluated (e.g. 0.20 for NGS eligibility).
     model_names : list[str] | None
@@ -786,8 +812,9 @@ def compare_models(
     Raises
     ------
     ValueError
-        If fewer than 2 evaluators are provided, or if model_names is given but its length
-        does not match the number of evaluators.
+        If fewer than 2 evaluators are provided, if the evaluators do not all share the
+        same number of samples, or if model_names is given but its length does not match
+        the number of evaluators.
 
     Examples
     --------
@@ -803,6 +830,15 @@ def compare_models(
         raise ValueError(
             f"model_names length ({len(model_names)}) must match "
             f"number of evaluators ({len(evaluators)})"
+        )
+    # A head-to-head table is only meaningful when every model is scored on the same
+    # test set. Differing sample counts mean different denominators and prevalences, so
+    # the comparison would be misleading. Require equal-length cohorts.
+    n_samples = len(evaluators[0].y_true)
+    if any(len(ev.y_true) != n_samples for ev in evaluators[1:]):
+        raise ValueError(
+            "compare_models expects all evaluators to share the same test set "
+            "(equal-length y_true), got differing sample counts"
         )
 
     names = (

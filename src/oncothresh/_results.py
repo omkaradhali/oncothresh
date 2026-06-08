@@ -28,13 +28,13 @@ class ThresholdResult(BaseModel):
     )
     ppv: float = Field(
         description=(
-            "Positive Predictive Value — of all samples the model called positive, "
+            "Positive Predictive Value: of all samples the model called positive, "
             "the fraction that actually were. Also called precision."
         )
     )
     npv: float = Field(
         description=(
-            "Negative Predictive Value — of all samples the model called negative, "
+            "Negative Predictive Value: of all samples the model called negative, "
             "the fraction that actually were."
         )
     )
@@ -104,7 +104,7 @@ class BootstrapResult(BaseModel):
 
     threshold: float = Field(description="The clinical cutoff value used for this bootstrap run.")
     n_bootstrap: int = Field(
-        description="Number of bootstrap resamples. 1000 is standard; use 2000 for publication."
+        description="Number of bootstrap resamples. 1000 is standard. Use 2000 for publication."
     )
     confidence: float = Field(
         description="Confidence level used for all intervals (e.g. 0.95 for 95% CI)."
@@ -165,7 +165,7 @@ class DecisionCurveResult(BaseModel):
     The model adds clinical value wherever ``net_benefit_model`` exceeds both
     ``net_benefit_all`` and zero.
 
-    ``net_benefit_none`` is not stored because it is always 0 — access it via the
+    ``net_benefit_none`` is not stored because it is always 0. Access it via the
     ``net_benefit_none`` property, which returns a list of zeros the same length as
     ``thresholds``.
     """
@@ -181,7 +181,7 @@ class DecisionCurveResult(BaseModel):
     )
     prevalence: float = Field(
         description=(
-            "Observed prevalence under ``clinical_threshold`` — fraction of samples "
+            "Observed prevalence under ``clinical_threshold``: the fraction of samples "
             "with y_true >= clinical_threshold. Fixed across the sweep."
         )
     )
@@ -208,7 +208,7 @@ class DecisionCurveResult(BaseModel):
 
     @property
     def net_benefit_none(self) -> list[float]:
-        """Net benefit of treating nobody — always 0.0 at every threshold."""
+        """Net benefit of treating nobody, always 0.0 at every threshold."""
         return [0.0] * len(self.thresholds)
 
     def __str__(self) -> str:
@@ -217,7 +217,7 @@ class DecisionCurveResult(BaseModel):
         return (
             f"DecisionCurveResult(clinical_threshold={self.clinical_threshold:.2f}, "
             f"prevalence={self.prevalence:.3f}, "
-            f"pt=[{lo:.2f}–{hi:.2f}], n_points={n})"
+            f"pt=[{lo:.2f}-{hi:.2f}], n_points={n})"
         )
 
 
@@ -234,8 +234,8 @@ class NNTResult(BaseModel):
        Of all patients the model flags as positive (predicted score >= threshold),
        how many does it take to find one true positive?
        Formula: 1 / PPV
-       Example: nnt_positive=1.14 means 114 flags yield ~100 true positives — very efficient.
-       Example: nnt_positive=5.0 means 5 flags for 1 true positive — 80% are false alarms.
+       Example: nnt_positive=1.14 means 114 flags yield ~100 true positives, very efficient.
+       Example: nnt_positive=5.0 means 5 flags for 1 true positive, 80% are false alarms.
 
     2. **nnt_negative** ("how dangerous is a negative call?")
        Of all patients the model clears as negative (predicted score < threshold),
@@ -249,8 +249,8 @@ class NNTResult(BaseModel):
     stores the exact float so callers can format as needed.
 
     Infinite values (float("inf")) arise naturally when a metric is perfect:
-    - nnt_positive is inf when PPV=0 (every flag is wrong; you will never find a true positive)
-    - nnt_negative is inf when NPV=1 (every clearance is correct; no missed cases exist)
+    - nnt_positive is inf when PPV=0 (every flag is wrong, you will never find a true positive)
+    - nnt_negative is inf when NPV=1 (every clearance is correct, no missed cases exist)
     """
 
     model_config = ConfigDict(frozen=True)
@@ -303,23 +303,23 @@ class ThresholdSensitivityResult(BaseModel):
     A note on terminology: "threshold sensitivity analysis" is a statistics/engineering term
     meaning "how sensitive are the results to a change in this parameter?" It does NOT refer
     to the clinical metric called sensitivity (true positive rate). Both concepts appear in
-    this class — ``sensitivities`` is the clinical metric, ``ThresholdSensitivityResult``
+    this class. ``sensitivities`` is the clinical metric, ``ThresholdSensitivityResult``
     describes the analysis. Context always disambiguates, but it is worth knowing upfront.
 
     This result stores three parallel arrays of equal length, indexed together:
 
-    - ``thresholds[i]`` — a threshold value within [nominal_threshold ± delta]
-    - ``sensitivities[i]`` — the model's clinical sensitivity (TPR) at that threshold
-    - ``specificities[i]`` — the model's clinical specificity (TNR) at that threshold
-    - ``shifts[i]`` — signed distance from the nominal threshold (negative = lower cutoff)
+    - ``thresholds[i]``: a threshold value within [nominal_threshold ± delta]
+    - ``sensitivities[i]``: the model's clinical sensitivity (TPR) at that threshold
+    - ``specificities[i]``: the model's clinical specificity (TNR) at that threshold
+    - ``shifts[i]``: signed distance from the nominal threshold (negative = lower cutoff)
 
     The arrays are ordered from lowest threshold to highest. The nominal threshold appears
-    as one of the entries; its index is ``nominal_index``.
+    as one of the entries. Its index is ``nominal_index``.
 
     Interpreting the curves:
-        - Flat curves: the model is robust — performance is stable across threshold variation.
-          Threshold choice doesn't matter much; the model generalises to lab-specific cutoffs.
-        - Steep curves: the model is fragile — small threshold shifts cause large performance
+        - Flat curves: the model is robust, performance is stable across threshold variation.
+          Threshold choice doesn't matter much. The model generalises to lab-specific cutoffs.
+        - Steep curves: the model is fragile, small threshold shifts cause large performance
           drops. The published cutoff was likely tuned to the training set and may not transfer.
         - In TC scoring: if sensitivity drops more than ~5% when the threshold shifts by ±2%,
           consider reporting results at a range of thresholds rather than a single point.
@@ -380,7 +380,7 @@ class ThresholdSensitivityResult(BaseModel):
         return (
             f"ThresholdSensitivityResult("
             f"nominal={self.nominal_threshold:.2f}, "
-            f"range=[{lo:.2f}–{hi:.2f}], n_points={n}, "
+            f"range=[{lo:.2f}-{hi:.2f}], n_points={n}, "
             f"sensitivity@nominal={nom_sens:.3f}, "
             f"specificity@nominal={nom_spec:.3f})"
         )
@@ -397,7 +397,7 @@ class BoundaryCalibrationResult(BaseModel):
 
     What "boundary zone" means:
         Only samples whose *predicted* score falls within [threshold ± window] are included.
-        These are the close-call predictions — the ones the model is least certain about and
+        These are the close-call predictions, the ones the model is least certain about and
         that are most likely to flip the binary decision if the score is even slightly wrong.
         Predictions far from the threshold do not affect the decision (0.05 is negative at
         both 20% and 15% thresholds), so they are excluded.
@@ -411,18 +411,18 @@ class BoundaryCalibrationResult(BaseModel):
             - Perfect calibration: mean_pred ≈ mean_true in every bin (points on the diagonal
               of a reliability diagram).
             - Systematic offset: mean_pred > mean_true in the upper half of the zone means
-              the model over-scores near the threshold — potentially over-referring patients.
+              the model over-scores near the threshold, potentially over-referring patients.
 
     The ECE formula (applied locally to the boundary zone):
-        ECE = Σ_bins [ (n_bin / N_boundary) x |mean_pred_bin x mean_true_bin| ]
+        ECE = Σ_bins [ (n_bin / N_boundary) * |mean_pred_bin - mean_true_bin| ]
 
         This is a weighted average of absolute calibration error per bin, where empty bins
         are skipped. Result is in the same units as the scores (e.g. 0.03 means 3 percentage
         points of average error in the boundary zone).
 
     Interpreting ``ece``:
-        - ECE < 0.02 (2 pp): well-calibrated at the boundary — acceptable for clinical use.
-        - ECE 0.02-0.05 (2-5 pp): moderate boundary miscalibration — document and monitor.
+        - ECE < 0.02 (2 pp): well-calibrated at the boundary, acceptable for clinical use.
+        - ECE 0.02-0.05 (2-5 pp): moderate boundary miscalibration, document and monitor.
         - ECE > 0.05 (5 pp): the model's predictions near the threshold are systematically
           biased. A score of 0.21 may reflect a true TC of 0.26, for example. This should
           raise concern about deploying the threshold without recalibration.
@@ -430,7 +430,7 @@ class BoundaryCalibrationResult(BaseModel):
     Empty boundary zone:
         If no predictions fall within [threshold ± window], ``n_samples`` will be 0 and
         ``ece`` will be ``float("nan")``. This usually means the model almost never predicts
-        scores near this threshold — worth investigating separately (the model may be
+        scores near this threshold, worth investigating separately (the model may be
         over-confident and never produce uncertain predictions).
     """
 
@@ -448,7 +448,7 @@ class BoundaryCalibrationResult(BaseModel):
     n_samples: int = Field(
         description=(
             "Number of samples whose predicted score fell within the boundary zone. "
-            "If 0, ece is float('nan') and all bin arrays are empty."
+            "If 0, ece is float('nan') and every bin value array is filled with nan."
         )
     )
     ece: float = Field(
@@ -492,7 +492,7 @@ class BoundaryCalibrationResult(BaseModel):
             f"BoundaryCalibrationResult("
             f"threshold={self.threshold:.2f}, "
             f"window={self.window:.2f}, "
-            f"zone=[{lo:.2f}–{hi:.2f}], "
+            f"zone=[{lo:.2f}-{hi:.2f}], "
             f"n_samples={self.n_samples}, "
             f"ece={ece_str})"
         )
@@ -502,7 +502,7 @@ class CompareModelsResult(BaseModel):
     """
     Side-by-side comparison of two or more models at the same clinical decision threshold.
 
-    Each model is represented by one ThresholdResult — the metrics produced by running
+    Each model is represented by one ThresholdResult, the metrics produced by running
     evaluate() at the shared threshold. The comparison shows all standard classification
     metrics (sensitivity, specificity, PPV, NPV, F1, MCC, accuracy) for each model so
     clinicians and researchers can judge which model performs better at a given cutoff.

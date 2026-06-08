@@ -1,14 +1,14 @@
 # Contributing to oncothresh
 
-Thanks for your interest. `oncothresh` is a small, focused library — contributions that sharpen the clinical-threshold use case are very welcome.
+Thanks for your interest. `oncothresh` is a small, focused library. Contributions that sharpen the clinical-threshold use case are very welcome.
 
 ## Scope
 
-`oncothresh` evaluates oncology AI models at predefined clinical thresholds on **binary outcomes derived from continuous scores** (e.g. TC, Ki-67, TMB, PD-L1). Pull requests inside this scope — new metrics, plotting, calibration utilities, better docs — are in scope and welcome.
+`oncothresh` evaluates oncology AI models at predefined clinical thresholds on **binary outcomes derived from continuous scores** (e.g. TC, Ki-67, TMB, PD-L1). Pull requests inside this scope (new metrics, plotting, calibration utilities, better docs) are welcome.
 
 Out of scope for now:
 
-- **Time-to-event / survival endpoints.** Use [`dcurves`](https://github.com/ddsjoberg/dcurves) for net benefit on survival outcomes; oncothresh intentionally does not duplicate that work.
+- **Time-to-event / survival endpoints.** Use [`dcurves`](https://github.com/ddsjoberg/dcurves) for net benefit on survival outcomes. oncothresh intentionally does not duplicate that work.
 - **Multi-class classification.** The library is built for the single-threshold binary case.
 
 If you have a clinical use case that does not fit, open an issue first to discuss before sending a PR.
@@ -39,7 +39,7 @@ uv run ruff format --check .
 uv run pytest tests/ --cov=src/oncothresh --cov-fail-under=70
 ```
 
-Tests must pass on Python 3.10, 3.11, 3.12, and 3.13. The CI matrix covers all four; locally, picking one is fine.
+Tests must pass on Python 3.10, 3.11, 3.12, and 3.13. The CI matrix covers all four. Locally, picking one is fine.
 
 ## Adding a new method
 
@@ -55,7 +55,7 @@ If you are adding a new `ThresholdEvaluator` method:
 This library is used to inform clinical decisions and to support publications. Statistical bugs matter. Two rules:
 
 - Any new statistical method must include a reference (paper or canonical implementation) in the docstring.
-- When implementing something that already exists in R or Python (e.g. `dcurves`, `scikit-learn`), include a regression test in `tests/validation/` that reproduces published numbers or matches the reference implementation to ≥4 decimal places.
+- When implementing something that already exists in R or Python (e.g. `dcurves`, `scikit-learn`), include a regression test in `tests/validation/` that reproduces published numbers or matches the reference implementation to at least 4 decimal places.
 
 The validation suite depends on heavier reference packages (pandas, lifelines, statsmodels via `dcurves`) that the library itself does not need, so they live behind a `validation` extra and the tests skip themselves when the extra is absent:
 
@@ -64,7 +64,7 @@ uv sync --extra dev --extra validation
 uv run pytest tests/validation/ -v
 ```
 
-`decision_curve()` is already covered here — it matches `dcurves` (Vickers/MSKCC) net benefit to machine precision (~1e-16).
+`decision_curve()` is already covered here. It matches `dcurves` (Vickers/MSKCC) net benefit to machine precision (~1e-16).
 
 ## Reporting bugs
 
@@ -73,7 +73,7 @@ Open a GitHub issue with:
 - The version of `oncothresh` (`oncothresh.__version__`).
 - A minimal reproducer (~10 lines) using synthetic data.
 - Expected vs observed output.
-- Why you believe the observed output is wrong — citation to a paper or reference implementation is most useful.
+- Why you believe the observed output is wrong. A citation to a paper or reference implementation is most useful.
 
 Statistical bug reports get priority.
 

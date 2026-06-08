@@ -1,5 +1,5 @@
 """
-oncothresh — Clinical threshold evaluation for oncology AI models.
+oncothresh: Clinical threshold evaluation for oncology AI models.
 
 Quick start::
 
