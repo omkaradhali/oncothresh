@@ -107,9 +107,17 @@ cellularity assessment, where it provides the clinical-threshold analysis at the
 objects, and supports Python 3.10 to 3.13 to remain compatible with hospital IT
 environments.
 
+# AI usage disclosure
+
+Generative AI tools (Anthropic's Claude) were used to assist with software
+development, documentation, and the preparation of this manuscript. All
+AI-assisted output was reviewed, tested, and validated by the author, who takes
+full responsibility for the content of the software and this paper.
+
 # Acknowledgements
 
 We thank the maintainers of `dcurves` for a clear reference implementation of
-decision curve analysis against which `oncothresh` is validated.
+decision curve analysis against which `oncothresh` is validated. The author
+received no specific funding for this work.
 
 # References
