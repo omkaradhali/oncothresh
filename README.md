@@ -333,6 +333,15 @@ CI matrix runs on Python 3.10, 3.11, 3.12, and 3.13 with an 85% coverage gate.
 
 ---
 
+## AI usage disclosure
+
+Generative AI tools (Anthropic's Claude) were used to assist with software
+development, documentation, and the preparation of the accompanying manuscript.
+All AI-assisted output was reviewed, tested, and validated by the author, who
+takes full responsibility for the content of the software and the paper.
+
+---
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

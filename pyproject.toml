@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "oncothresh"
-version = "0.1.0"
+version = "0.1.1"
 description = "Clinical threshold evaluation for oncology AI models"
 readme = "README.md"
 license = { file = "LICENSE" }
