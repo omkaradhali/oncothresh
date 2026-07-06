@@ -17,6 +17,8 @@ Quick start::
     report = ev.multi_threshold_report(thresholds=[0.20, 0.50])
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
 from oncothresh._evaluator import ThresholdEvaluator, compare_models
 from oncothresh._results import (
     BootstrapResult,
@@ -30,7 +32,12 @@ from oncothresh._results import (
     ThresholdSensitivityResult,
 )
 
-__version__ = "0.1.0"
+# Single source of truth: read the version from installed distribution metadata (which
+# comes from pyproject.toml) so __version__ can never drift from the packaged version.
+try:
+    __version__ = version("oncothresh")
+except PackageNotFoundError:  # imported from a source tree without an installed distribution
+    __version__ = "0.0.0+unknown"
 __all__ = [
     "ThresholdEvaluator",
     "compare_models",
