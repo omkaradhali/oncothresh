@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the accompanying paper."
+type: software
+authors:
+  - family-names: Adhali
+    given-names: Omkar
+    orcid: https://orcid.org/0009-0002-9955-5163
+    affiliation: Memorial Sloan Kettering Cancer Center
+title: "oncothresh: Clinical-threshold evaluation for oncology AI models"
+version: 0.1.1
+date-released: 2026-06-08
+url: "https://github.com/omkaradhali/oncothresh"
+repository-code: "https://github.com/omkaradhali/oncothresh"
+license: MIT
+keywords:
+  - oncology
+  - pathology
+  - artificial intelligence
+  - clinical threshold
+  - model evaluation
+  - decision curve analysis
+preferred-citation:
+  type: article
+  authors:
+    - family-names: Adhali
+      given-names: Omkar
+      orcid: https://orcid.org/0009-0002-9955-5163
+      affiliation: Memorial Sloan Kettering Cancer Center
+  title: "Oncothresh: A Framework for Evaluating Pathology AI at Clinically Defined Decision Thresholds"
+  journal: Precision Pathology
+  year: 2026  # TODO: update to actual publication year on acceptance
+  doi: "TODO: fill in DOI on acceptance"  # TODO: replace with real DOI on acceptance
