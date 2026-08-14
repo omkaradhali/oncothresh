@@ -865,7 +865,7 @@ wheels = [
 
 [[package]]
 name = "oncothresh"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -883,9 +883,6 @@ dev = [
     { name = "pytest-cov" },
     { name = "ruff" },
 ]
-plotting = [
-    { name = "matplotlib" },
-]
 validation = [
     { name = "dcurves" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -895,7 +892,6 @@ validation = [
 [package.metadata]
 requires-dist = [
     { name = "dcurves", marker = "extra == 'validation'", specifier = ">=1.0" },
-    { name = "matplotlib", marker = "extra == 'plotting'", specifier = ">=3.8" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pandas", marker = "extra == 'validation'", specifier = ">=2.0" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -905,7 +901,7 @@ requires-dist = [
     { name = "scikit-learn", specifier = ">=1.4" },
     { name = "scipy", specifier = ">=1.11" },
 ]
-provides-extras = ["plotting", "dev", "validation"]
+provides-extras = ["dev", "validation"]
 
 [[package]]
 name = "packaging"
