@@ -2,8 +2,7 @@
 Numerical validation of oncothresh DCA against the reference dcurves package.
 
 Decision Curve Analysis is statistically subtle, and a silent error in the
-net-benefit formula would be a credibility-ending bug (Gemini validity review,
-2026-05-20: "a retraction-level bug would kill credibility"). This module proves
+net-benefit formula would be a credibility-ending bug. This module proves
 that ThresholdEvaluator.decision_curve reproduces the net-benefit values of
 dcurves (Vickers et al., MSKCC) to machine precision.
 
@@ -105,8 +104,8 @@ def test_decision_curve_matches_dcurves(
     ):
         key = round(float(pt), 6)
         assert key in dc_model, f"dcurves produced no row for pt={key}"
-        # 1e-9 is far tighter than the 4-decimal-place bar set by the validity review.
-        # In practice the two implementations agree to ~1e-16 (identical float arithmetic).
+        # 1e-9 is a conservative bar; in practice the two implementations agree
+        # to ~1e-16 (identical float arithmetic).
         assert nb_model == pytest.approx(dc_model[key], abs=1e-9), (
             f"model net benefit diverges at pt={key}: "
             f"oncothresh={nb_model}, dcurves={dc_model[key]}"
