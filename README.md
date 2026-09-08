@@ -25,7 +25,7 @@ Continuous oncology AI models (tumor cellularity (TC), Ki-67, TMB, PD-L1) are de
 pip install oncothresh
 ```
 
-Requires Python 3.10+. Core dependencies: `numpy`, `scipy`, `scikit-learn`, `pydantic`. Plotting helpers (forthcoming in v0.1.1) live behind an optional extra: `pip install oncothresh[plotting]`.
+Requires Python 3.10+. Core dependencies: `numpy`, `scipy`, `scikit-learn`, `pydantic`. Every result object exposes the arrays needed to plot it yourself; see [`oncothresh-web`](https://github.com/omkaradhali/oncothresh-web) for a ready-made dashboard.
 
 ---
 
