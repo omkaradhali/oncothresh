@@ -258,6 +258,32 @@ accuracy             0.878       0.788
 
 All evaluators must share the same test set (equal-length `y_true`) so the comparison is on a common denominator. Typical use cases: comparing UNI vs. CONCH features at the 20% TC cutoff, or comparing a new model version against a published baseline.
 
+### 9. `bias_analysis()`: subgroup false negative/positive rates
+
+```python
+scanner = rng.choice(["Scanner-A", "Scanner-B", "Scanner-C"], size=n, p=[0.4, 0.4, 0.2])
+# Simulate a batch effect: Scanner-C predictions carry extra upward noise.
+extra_noise = np.where(scanner == "Scanner-C", rng.normal(0.10, 0.05, n), 0.0)
+y_pred_scanner = np.clip(y_pred + extra_noise, 0.0, 1.0)
+
+ev_scanner = ThresholdEvaluator(y_true=y_true, y_pred=y_pred_scanner)
+result = ev_scanner.bias_analysis(metadata={"scanner": scanner}, threshold=0.20)
+print(result)
+```
+
+```
+BiasAnalysisResult(threshold=0.20)
+  overall: ThresholdResult(threshold=0.20, sensitivity=0.948, specificity=0.676, ppv=0.843, npv=0.875, f1=0.892, mcc=0.669, accuracy=0.852, n=500 [324+/176-])
+  scanner:
+    Scanner-A: n=200, sensitivity=0.935, specificity=0.803, fn_rate=0.065, fp_rate=0.197
+    Scanner-B: n=200, sensitivity=0.942, specificity=0.759, fn_rate=0.058, fp_rate=0.241
+    Scanner-C: n=100, sensitivity=0.984, specificity=0.278, fn_rate=0.016, fp_rate=0.722
+```
+
+`evaluate()` and `bootstrap_ci()` report performance across the whole cohort, which can hide a subgroup the model handles badly. Here the overall specificity (0.676) looks unremarkable, but `bias_analysis()` shows it is not evenly distributed: Scanner-C's false positive rate (0.722) is roughly three times Scanner-A's and Scanner-B's, driven entirely by the batch effect injected above. Pass any number of metadata columns (scanner, staining batch, institution, tissue type) as a dict of column name to per-sample labels, and every category gets its own breakdown.
+
+`bias_analysis()` reports numbers, not verdicts. `is_reliable` flags a subgroup with fewer than `min_group_size` samples (default 5) so a rate is not read as meaningful when it comes from too few cases, but deciding whether a given gap is clinically significant is left to the user.
+
 ---
 
 ## API at a glance
@@ -274,6 +300,7 @@ All methods live on `ThresholdEvaluator(y_true, y_pred)` unless noted.
 | `boundary_calibration(threshold, window=0.10, n_bins=10)` | `BoundaryCalibrationResult` | You want calibration error *at the cutoff*, not globally |
 | `decision_curve(clinical_threshold, thresholds=None)` | `DecisionCurveResult` | You want net benefit across a sweep of harm tolerances for a fixed clinical decision. Requires `y_pred` to be a calibrated probability in `[0, 1]` |
 | `compare_models(evaluators, threshold, model_names=None)` *(module-level)* | `CompareModelsResult` | You want side-by-side metrics for two or more models at the same cutoff |
+| `bias_analysis(metadata, threshold, min_group_size=5)` | `BiasAnalysisResult` | You want to check whether performance is uneven across a subgroup (scanner, batch, institution) rather than averaged away |
 
 Result objects are immutable Pydantic models with `.model_dump_json()` and informative `__str__` output for quick inspection.
 
@@ -293,7 +320,7 @@ Result objects are immutable Pydantic models with `.model_dump_json()` and infor
 
 ## Versioning and stability
 
-`v0.1` is an early release. The eight methods documented above are the locked surface for v0.1. Signatures and result fields will be preserved through v0.2 patches. Additional methods (`shap_threshold_analysis`, `bias_analysis`, `full_report`) are planned for v0.2.
+`v0.1` is an early release. The eight methods documented above are the locked surface for v0.1. Signatures and result fields will be preserved through v0.2 patches. `bias_analysis()` has shipped ahead of the v0.2 release. `shap_threshold_analysis()` and `full_report()` remain planned for v0.2.
 
 ---
 

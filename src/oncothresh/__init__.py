@@ -21,6 +21,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from oncothresh._evaluator import ThresholdEvaluator, compare_models
 from oncothresh._results import (
+    BiasAnalysisResult,
     BootstrapResult,
     BoundaryCalibrationResult,
     CompareModelsResult,
@@ -28,6 +29,7 @@ from oncothresh._results import (
     DecisionCurveResult,
     MultiThresholdReport,
     NNTResult,
+    SubgroupResult,
     ThresholdResult,
     ThresholdSensitivityResult,
 )
@@ -50,4 +52,6 @@ __all__ = [
     "ThresholdSensitivityResult",
     "BoundaryCalibrationResult",
     "CompareModelsResult",
+    "SubgroupResult",
+    "BiasAnalysisResult",
 ]

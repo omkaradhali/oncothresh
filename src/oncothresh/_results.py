@@ -513,6 +513,111 @@ class BoundaryCalibrationResult(BaseModel):
         )
 
 
+class SubgroupResult(BaseModel):
+    """
+    Classification metrics for one category within a metadata-defined subgroup.
+
+    Produced by ``bias_analysis()``, one instance per distinct value in a metadata
+    column (e.g. one ``SubgroupResult`` for "Scanner A", another for "Scanner B").
+    Sensitivity and specificity are the same technical metrics reported by
+    ``evaluate()``, restricted to just this subgroup's samples. ``false_negative_rate``
+    and ``false_positive_rate`` are their plain-language complements
+    (1 - sensitivity, 1 - specificity), exposed as named fields so the clinically
+    relevant number ("how often does this subgroup get missed") does not require
+    the reader to do the subtraction themselves.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    group: str = Field(description="The category label this result describes (e.g. 'Scanner A').")
+    n_total: int = Field(description="Number of samples in this subgroup.")
+    n_positive: int = Field(
+        description="Ground-truth positive samples in this subgroup (at or above the threshold)."
+    )
+    n_negative: int = Field(
+        description="Ground-truth negative samples in this subgroup (below the threshold)."
+    )
+    sensitivity: float = Field(description="True positive rate within this subgroup.")
+    specificity: float = Field(description="True negative rate within this subgroup.")
+    ppv: float = Field(description="Positive predictive value within this subgroup.")
+    npv: float = Field(description="Negative predictive value within this subgroup.")
+    false_negative_rate: float = Field(
+        description=(
+            "Fraction of this subgroup's true positives the model missed. Equal to 1 - sensitivity."
+        )
+    )
+    false_positive_rate: float = Field(
+        description=(
+            "Fraction of this subgroup's true negatives the model flagged incorrectly. "
+            "Equal to 1 - specificity."
+        )
+    )
+    is_reliable: bool = Field(
+        description=(
+            "True when this subgroup has at least min_group_size samples AND at least "
+            "one ground-truth positive and one ground-truth negative. False flags either "
+            "a subgroup too small to trust, or one with zero positives or zero negatives, "
+            "where sensitivity/specificity (and their complements) are degenerate "
+            "placeholders rather than real estimates, even if the rate looks extreme."
+        )
+    )
+
+    def __str__(self) -> str:
+        flag = "" if self.is_reliable else " [small group, rate unreliable]"
+        return (
+            f"{self.group}: n={self.n_total}, sensitivity={self.sensitivity:.3f}, "
+            f"specificity={self.specificity:.3f}, fn_rate={self.false_negative_rate:.3f}, "
+            f"fp_rate={self.false_positive_rate:.3f}{flag}"
+        )
+
+
+class BiasAnalysisResult(BaseModel):
+    """
+    Subgroup breakdown of false negative and false positive rates at a clinical threshold.
+
+    Global metrics from ``evaluate()`` can hide performance that is systematically worse
+    for one subgroup of samples, for example one scanner, one staining batch, or one
+    institution. ``bias_analysis()`` computes the same classification metrics ``evaluate()``
+    reports, but separately for every category in every metadata column supplied, so a
+    subgroup with an elevated miss rate is visible instead of averaged away.
+
+    This result reports numbers only. It does not flag a subgroup as "biased": deciding
+    whether a given disparity is clinically meaningful requires domain judgment and,
+    usually, more samples than a single evaluation run provides. ``is_reliable`` on each
+    ``SubgroupResult`` is a sample-size check, not a verdict on the disparity itself.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    threshold: float = Field(description="The clinical cutoff used for every subgroup breakdown.")
+    min_group_size: int = Field(
+        description=(
+            "Minimum subgroup size for is_reliable to be True, as passed to bias_analysis()."
+        )
+    )
+    overall: ThresholdResult = Field(
+        description=(
+            "Metrics on the full cohort, from evaluate(), for comparison against each subgroup."
+        )
+    )
+    by_column: dict[str, list[SubgroupResult]] = Field(
+        description=(
+            "One entry per metadata column. Each value is the list of SubgroupResult "
+            "objects for that column's categories, sorted by category label."
+        )
+    )
+
+    def __str__(self) -> str:
+        lines = [
+            f"BiasAnalysisResult(threshold={self.threshold:.2f})",
+            f"  overall: {self.overall}",
+        ]
+        for column, groups in self.by_column.items():
+            lines.append(f"  {column}:")
+            lines.extend(f"    {group}" for group in groups)
+        return "\n".join(lines)
+
+
 class CompareModelsResult(BaseModel):
     """
     Side-by-side comparison of two or more models at the same clinical decision threshold.

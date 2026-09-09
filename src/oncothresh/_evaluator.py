@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import math
 import warnings
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 from scipy.stats import bootstrap as scipy_bootstrap
 from sklearn.metrics import confusion_matrix
 
 from oncothresh._results import (
+    BiasAnalysisResult,
     BootstrapResult,
     BoundaryCalibrationResult,
     CompareModelsResult,
@@ -15,6 +17,7 @@ from oncothresh._results import (
     DecisionCurveResult,
     MultiThresholdReport,
     NNTResult,
+    SubgroupResult,
     ThresholdResult,
     ThresholdSensitivityResult,
 )
@@ -765,6 +768,170 @@ class ThresholdEvaluator:
             thresholds=pts.tolist(),
             net_benefit_model=nb_model,
             net_benefit_all=nb_all,
+        )
+
+    def bias_analysis(
+        self,
+        metadata: Mapping[str, Sequence],
+        threshold: float,
+        min_group_size: int = 5,
+    ) -> BiasAnalysisResult:
+        """
+        Break down false negative and false positive rates by sample metadata.
+
+        evaluate() and bootstrap_ci() report performance across the whole cohort. That
+        can hide a model that performs well on average but is systematically worse for
+        one subgroup of samples, for example one scanner, one staining batch, or one
+        institution. bias_analysis() computes the same classification metrics separately
+        for every category in every metadata column supplied, so an elevated miss rate
+        isolated to a subgroup is visible instead of averaged into the overall number.
+
+        How it works:
+            For each metadata column, samples are grouped by their category value in
+            that column (e.g. a "scanner" column with values "A" and "B" produces one
+            group per scanner). Within each group, evaluate() is applied to just that
+            group's samples at the given threshold, plus false_negative_rate
+            (1 - sensitivity) and false_positive_rate (1 - specificity), the
+            plain-language framing of the same numbers.
+
+        On reliability:
+            A subgroup with few samples can show an extreme rate purely from chance, and
+            a subgroup with zero true positives (or zero true negatives) has an
+            undefined sensitivity (or specificity): _compute_metrics() reports 0.0 for a
+            zero denominator (the same convention evaluate() uses), which would otherwise
+            read as "this subgroup misses 100% of cases" when in fact there were no
+            cases of that kind to miss. is_reliable is True only when a subgroup has at
+            least min_group_size samples AND at least one true positive and one true
+            negative, so a degenerate rate is never presented as trustworthy. This is a
+            sample-size and denominator check, not a judgment on whether a disparity is
+            clinically meaningful, that call is left to the user. bias_analysis() reports
+            numbers, it does not label a model "biased".
+
+        On metadata values:
+            Category labels must be hashable and finite (no NaN). Python treats bool as
+            a subtype of int, so a column mixing True/False with 1/0 will merge "True"
+            with "1" and "False" with "0" into single groups (Python's own equality
+            rule, not something this method adds). Use a single consistent type per
+            column to avoid this.
+
+        Parameters
+        ----------
+        metadata : Mapping[str, Sequence]
+            Maps a column name (e.g. "scanner") to a 1-D array-like of category labels,
+            one label per sample, in the same order as y_true/y_pred. Must contain at
+            least one column, and every column must have exactly as many entries as
+            y_true. Category labels must be hashable (e.g. str, int, bool) and finite,
+            NaN is rejected as a category value the same way the constructor rejects it
+            in y_true/y_pred.
+        threshold : float
+            Clinical cutoff value shared across every subgroup breakdown.
+        min_group_size : int
+            Minimum number of samples a subgroup needs before is_reliable can be True.
+            Default 5, matching the per-bin reliability rule used in
+            boundary_calibration(). A subgroup with zero positives or zero negatives is
+            never reliable regardless of this value.
+
+        Returns
+        -------
+        BiasAnalysisResult
+            The overall ThresholdResult for comparison, plus one SubgroupResult per
+            category for every metadata column, accessible via .by_column.
+
+        Raises
+        ------
+        ValueError
+            If metadata is empty, if a column is a bare string instead of a sequence of
+            per-sample labels, if a column is not 1-D or its length does not match the
+            number of samples in y_true, if a column contains NaN, if a column's labels
+            are not all hashable, or if min_group_size is less than 1.
+
+        Examples
+        --------
+        >>> ev = ThresholdEvaluator(y_true=tc_scores, y_pred=model_scores)
+        >>> result = ev.bias_analysis(
+        ...     metadata={"scanner": scanner_labels},
+        ...     threshold=0.20,
+        ... )
+        >>> for group in result.by_column["scanner"]:
+        ...     print(group)
+        """
+        if not metadata:
+            raise ValueError("metadata must contain at least one column")
+        if min_group_size < 1:
+            raise ValueError(f"min_group_size must be at least 1, got {min_group_size}")
+
+        n = len(self.y_true)
+        labels_by_column: dict[str, np.ndarray] = {}
+        unique_by_column: dict[str, set] = {}
+        for column, values in metadata.items():
+            if isinstance(values, (str, bytes)):
+                raise ValueError(
+                    f"metadata column {column!r} is a single string, expected a "
+                    f"sequence of {n} per-sample labels"
+                )
+            labels = np.asarray(values, dtype=object)
+            if labels.ndim != 1:
+                raise ValueError(
+                    f"metadata column {column!r} must be 1-D, got shape {labels.shape}"
+                )
+            if len(labels) != n:
+                raise ValueError(
+                    f"metadata column {column!r} has {len(labels)} entries, "
+                    f"expected {n} (one per sample in y_true/y_pred)"
+                )
+            # NaN cannot be grouped correctly: NaN != NaN, so a boolean mask built from
+            # `labels == nan` would be all-False and silently drop those samples from
+            # every group rather than raising. Reject loudly instead, the same
+            # philosophy the constructor uses for NaN in y_true/y_pred.
+            if any(isinstance(v, (float, np.floating)) and math.isnan(v) for v in labels):
+                raise ValueError(
+                    f"metadata column {column!r} contains NaN, all labels must be finite"
+                )
+            try:
+                unique_by_column[column] = set(labels.tolist())
+            except TypeError as exc:
+                raise ValueError(
+                    f"metadata column {column!r} contains unhashable labels, "
+                    f"category values must be hashable (e.g. str, int, bool)"
+                ) from exc
+            labels_by_column[column] = labels
+
+        overall = self.evaluate(threshold)
+        y_true_bin, y_pred_bin = self._binarize(threshold)
+
+        by_column: dict[str, list[SubgroupResult]] = {}
+        for column, labels in labels_by_column.items():
+            groups: list[SubgroupResult] = []
+
+            for group_label in sorted(unique_by_column[column], key=str):
+                mask = labels == group_label
+                group_metrics = self._compute_metrics(threshold, y_true_bin[mask], y_pred_bin[mask])
+                n_group = int(mask.sum())
+                has_both_classes = group_metrics.n_positive > 0 and group_metrics.n_negative > 0
+
+                groups.append(
+                    SubgroupResult(
+                        group=str(group_label),
+                        n_total=n_group,
+                        n_positive=group_metrics.n_positive,
+                        n_negative=group_metrics.n_negative,
+                        sensitivity=group_metrics.sensitivity,
+                        specificity=group_metrics.specificity,
+                        ppv=group_metrics.ppv,
+                        npv=group_metrics.npv,
+                        false_negative_rate=1.0 - group_metrics.sensitivity,
+                        false_positive_rate=1.0 - group_metrics.specificity,
+                        is_reliable=n_group >= min_group_size and has_both_classes,
+                    )
+                )
+
+            by_column[column] = groups
+
+        return BiasAnalysisResult(
+            threshold=threshold,
+            min_group_size=min_group_size,
+            overall=overall,
+            by_column=by_column,
         )
 
     def _binarize(self, threshold: float) -> tuple[np.ndarray, np.ndarray]:

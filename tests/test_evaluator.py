@@ -6,12 +6,14 @@ from pydantic import ValidationError
 
 from oncothresh import ThresholdEvaluator, compare_models
 from oncothresh._results import (
+    BiasAnalysisResult,
     BootstrapResult,
     BoundaryCalibrationResult,
     CompareModelsResult,
     DecisionCurveResult,
     MultiThresholdReport,
     NNTResult,
+    SubgroupResult,
     ThresholdResult,
     ThresholdSensitivityResult,
 )
@@ -864,3 +866,186 @@ def test_compare_models_str_contains_threshold():
 def test_compare_models_str_contains_n_models():
     result = compare_models(list(_compare_pair()), threshold=0.5)
     assert "n_models=2" in str(result)
+
+
+# bias_analysis()
+def _scanner_metadata() -> dict[str, list[str]]:
+    """Aligned with _known_evaluator(): idx 0-2 -> Scanner A, idx 3-5 -> Scanner B.
+
+    _known_evaluator() confusion at threshold=0.5: TP=2 (idx 0,4), FP=1 (idx 3),
+    FN=1 (idx 1), TN=2 (idx 2,5). Split by scanner:
+      Scanner A (idx 0,1,2): TP=1 (idx0), FN=1 (idx1), TN=1 (idx2)
+        -> sensitivity=0.5, specificity=1.0
+      Scanner B (idx 3,4,5): FP=1 (idx3), TP=1 (idx4), TN=1 (idx5)
+        -> sensitivity=1.0, specificity=0.5
+    """
+    return {
+        "scanner": ["Scanner A", "Scanner A", "Scanner A", "Scanner B", "Scanner B", "Scanner B"]
+    }
+
+
+def test_bias_analysis_returns_correct_type():
+    result = _known_evaluator().bias_analysis(_scanner_metadata(), threshold=0.5)
+    assert isinstance(result, BiasAnalysisResult)
+    assert all(isinstance(g, SubgroupResult) for g in result.by_column["scanner"])
+
+
+def test_bias_analysis_overall_matches_evaluate():
+    ev = _known_evaluator()
+    result = ev.bias_analysis(_scanner_metadata(), threshold=0.5)
+    assert result.overall == ev.evaluate(threshold=0.5)
+
+
+def test_bias_analysis_group_labels_sorted():
+    result = _known_evaluator().bias_analysis(_scanner_metadata(), threshold=0.5)
+    labels = [g.group for g in result.by_column["scanner"]]
+    assert labels == ["Scanner A", "Scanner B"]
+
+
+def test_bias_analysis_group_sensitivity_and_specificity():
+    result = _known_evaluator().bias_analysis(_scanner_metadata(), threshold=0.5)
+    by_group = {g.group: g for g in result.by_column["scanner"]}
+
+    assert by_group["Scanner A"].sensitivity == pytest.approx(0.5)
+    assert by_group["Scanner A"].specificity == pytest.approx(1.0)
+    assert by_group["Scanner B"].sensitivity == pytest.approx(1.0)
+    assert by_group["Scanner B"].specificity == pytest.approx(0.5)
+
+
+def test_bias_analysis_false_rates_are_complements():
+    result = _known_evaluator().bias_analysis(_scanner_metadata(), threshold=0.5)
+    for group in result.by_column["scanner"]:
+        assert group.false_negative_rate == pytest.approx(1.0 - group.sensitivity)
+        assert group.false_positive_rate == pytest.approx(1.0 - group.specificity)
+
+
+def test_bias_analysis_group_counts():
+    result = _known_evaluator().bias_analysis(_scanner_metadata(), threshold=0.5)
+    for group in result.by_column["scanner"]:
+        assert group.n_total == 3
+        assert group.n_positive + group.n_negative == group.n_total
+
+
+def test_bias_analysis_is_reliable_respects_min_group_size():
+    result = _known_evaluator().bias_analysis(_scanner_metadata(), threshold=0.5, min_group_size=3)
+    assert all(g.is_reliable for g in result.by_column["scanner"])
+
+    strict = _known_evaluator().bias_analysis(_scanner_metadata(), threshold=0.5, min_group_size=4)
+    assert all(not g.is_reliable for g in strict.by_column["scanner"])
+
+
+def test_bias_analysis_multiple_columns():
+    metadata = _scanner_metadata()
+    metadata["batch"] = ["1", "1", "2", "2", "3", "3"]
+    result = _known_evaluator().bias_analysis(metadata, threshold=0.5)
+    assert set(result.by_column) == {"scanner", "batch"}
+    assert len(result.by_column["batch"]) == 3
+
+
+def test_bias_analysis_empty_metadata_raises():
+    with pytest.raises(ValueError, match="at least one column"):
+        _known_evaluator().bias_analysis({}, threshold=0.5)
+
+
+def test_bias_analysis_mismatched_column_length_raises():
+    with pytest.raises(ValueError, match="scanner"):
+        _known_evaluator().bias_analysis({"scanner": ["A", "B"]}, threshold=0.5)
+
+
+def test_bias_analysis_rejects_non_positive_min_group_size():
+    with pytest.raises(ValueError, match="min_group_size"):
+        _known_evaluator().bias_analysis(_scanner_metadata(), threshold=0.5, min_group_size=0)
+
+
+def test_bias_analysis_stores_threshold_and_min_group_size():
+    result = _known_evaluator().bias_analysis(_scanner_metadata(), threshold=0.5, min_group_size=2)
+    assert result.threshold == 0.5
+    assert result.min_group_size == 2
+
+
+def test_bias_analysis_result_is_frozen():
+    result = _known_evaluator().bias_analysis(_scanner_metadata(), threshold=0.5)
+    with pytest.raises(ValidationError):
+        result.threshold = 0.99  # type: ignore[misc]
+
+
+def test_subgroup_result_is_frozen():
+    result = _known_evaluator().bias_analysis(_scanner_metadata(), threshold=0.5)
+    group = result.by_column["scanner"][0]
+    with pytest.raises(ValidationError):
+        group.n_total = 999  # type: ignore[misc]
+
+
+def test_bias_analysis_str_contains_threshold():
+    result = _known_evaluator().bias_analysis(_scanner_metadata(), threshold=0.5)
+    assert "0.50" in str(result)
+
+
+def test_bias_analysis_str_contains_group_labels():
+    result = _known_evaluator().bias_analysis(_scanner_metadata(), threshold=0.5)
+    s = str(result)
+    assert "Scanner A" in s
+    assert "Scanner B" in s
+
+
+def test_subgroup_result_str_flags_unreliable_group():
+    result = _known_evaluator().bias_analysis(_scanner_metadata(), threshold=0.5, min_group_size=10)
+    group = result.by_column["scanner"][0]
+    assert "unreliable" in str(group)
+
+
+def _homogeneous_class_metadata() -> dict[str, list[str]]:
+    """Aligned with _known_evaluator(): "R1" is the 3 ground-truth positives (idx 0,1,4),
+    "R2" is the 3 ground-truth negatives (idx 2,3,5). Each group has zero of the other class.
+    """
+    return {"region": ["R1", "R1", "R2", "R2", "R1", "R2"]}
+
+
+def test_bias_analysis_zero_positive_or_negative_group_is_not_reliable():
+    result = _known_evaluator().bias_analysis(
+        _homogeneous_class_metadata(), threshold=0.5, min_group_size=1
+    )
+    by_group = {g.group: g for g in result.by_column["region"]}
+
+    assert by_group["R1"].n_positive == 3
+    assert by_group["R1"].n_negative == 0
+    assert not by_group["R1"].is_reliable
+
+    assert by_group["R2"].n_positive == 0
+    assert by_group["R2"].n_negative == 3
+    assert not by_group["R2"].is_reliable
+
+
+def test_bias_analysis_zero_class_group_does_not_raise():
+    # Should not crash even though one class is entirely absent from each group.
+    result = _known_evaluator().bias_analysis(_homogeneous_class_metadata(), threshold=0.5)
+    assert len(result.by_column["region"]) == 2
+
+
+def test_bias_analysis_rejects_string_metadata_column():
+    with pytest.raises(ValueError, match="single string"):
+        _known_evaluator().bias_analysis({"scanner": "Scanner A"}, threshold=0.5)
+
+
+def test_bias_analysis_rejects_non_1d_metadata():
+    metadata = {"scanner": [["A"], ["A"], ["A"], ["B"], ["B"], ["B"]]}
+    with pytest.raises(ValueError, match="1-D"):
+        _known_evaluator().bias_analysis(metadata, threshold=0.5)
+
+
+def test_bias_analysis_rejects_nan_metadata():
+    metadata = {"scanner": ["A", "A", "A", "B", "B", float("nan")]}
+    with pytest.raises(ValueError, match="NaN"):
+        _known_evaluator().bias_analysis(metadata, threshold=0.5)
+
+
+def test_bias_analysis_rejects_unhashable_labels():
+    metadata = {"scanner": [{"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}, {"a": 1}]}
+    with pytest.raises(ValueError, match="unhashable"):
+        _known_evaluator().bias_analysis(metadata, threshold=0.5)
+
+
+def test_bias_analysis_rejects_numpy_float32_nan_metadata():
+    metadata = {"scanner": ["A", "A", "A", "B", "B", np.float32("nan")]}
+    with pytest.raises(ValueError, match="NaN"):
+        _known_evaluator().bias_analysis(metadata, threshold=0.5)
