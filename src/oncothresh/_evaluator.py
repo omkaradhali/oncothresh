@@ -881,11 +881,12 @@ class ThresholdEvaluator:
                 )
             # NaN cannot be grouped correctly: NaN != NaN, so a boolean mask built from
             # `labels == nan` would be all-False and silently drop those samples from
-            # every group rather than raising. Reject loudly instead, the same
-            # philosophy the constructor uses for NaN in y_true/y_pred.
-            if any(isinstance(v, (float, np.floating)) and math.isnan(v) for v in labels):
+            # every group rather than raising. inf is not a meaningful category label
+            # either. Reject both loudly, the same "must be finite" policy the
+            # constructor already applies to y_true/y_pred.
+            if any(isinstance(v, (float, np.floating)) and not math.isfinite(v) for v in labels):
                 raise ValueError(
-                    f"metadata column {column!r} contains NaN, all labels must be finite"
+                    f"metadata column {column!r} contains NaN or inf, all labels must be finite"
                 )
             try:
                 unique_by_column[column] = set(labels.tolist())

@@ -1049,3 +1049,9 @@ def test_bias_analysis_rejects_numpy_float32_nan_metadata():
     metadata = {"scanner": ["A", "A", "A", "B", "B", np.float32("nan")]}
     with pytest.raises(ValueError, match="NaN"):
         _known_evaluator().bias_analysis(metadata, threshold=0.5)
+
+
+def test_bias_analysis_rejects_inf_metadata():
+    metadata = {"scanner": ["A", "A", "A", "B", "B", float("inf")]}
+    with pytest.raises(ValueError, match="NaN or inf"):
+        _known_evaluator().bias_analysis(metadata, threshold=0.5)
