@@ -1,5 +1,7 @@
 """Tests for ThresholdEvaluator.evaluate() and bootstrap_ci()."""
 
+import math
+
 import numpy as np
 import pytest
 from pydantic import ValidationError
@@ -523,6 +525,42 @@ def test_nnt_zero_ppv_returns_inf_positive():
     )
     result = ev.nnt(threshold=0.5)
     assert result.nnt_positive == float("inf")
+
+
+def test_nnt_negative_is_nan_when_model_predicts_all_positive():
+    """Zero model-negative calls means 'safety of a clearance' is undefined, not 1.0.
+
+    Repro from issue #10: model predicts positive for every sample, so there is no
+    cleared cohort to sample a missed case from.
+    """
+    ev = ThresholdEvaluator(y_true=[0.1, 0.9, 0.2, 0.8], y_pred=[0.9, 0.9, 0.9, 0.9])
+    result = ev.nnt(threshold=0.5)
+    assert result.n_predicted_negative == 0
+    assert math.isnan(result.nnt_negative)
+
+
+def test_nnt_negative_is_finite_when_model_makes_negative_calls():
+    """Sanity check: a non-degenerate case must not accidentally trip the nan path."""
+    result = _known_evaluator().nnt(threshold=0.5)
+    assert result.n_predicted_negative > 0
+    assert math.isfinite(result.nnt_negative)
+
+
+def test_nnt_positive_is_inf_when_model_predicts_all_negative():
+    """Symmetric zero-call case on the positive side: no flags at all, still inf."""
+    ev = ThresholdEvaluator(y_true=[0.1, 0.9, 0.2, 0.8], y_pred=[0.1, 0.1, 0.1, 0.1])
+    result = ev.nnt(threshold=0.5)
+    assert result.n_predicted_positive == 0
+    assert result.nnt_positive == float("inf")
+
+
+def test_nnt_predicted_counts_match_binarized_predictions():
+    """n_predicted_positive/negative reflect y_pred calls, not ground-truth counts."""
+    result = _known_evaluator().nnt(threshold=0.5)
+    # _known_evaluator: y_pred = [0.8, 0.2, 0.1, 0.9, 0.7, 0.3] at threshold=0.5
+    # -> positive calls at idx 0, 3, 4 (3 total), negative calls at idx 1, 2, 5 (3 total)
+    assert result.n_predicted_positive == 3
+    assert result.n_predicted_negative == 3
 
 
 def test_nnt_counts_match_evaluate():

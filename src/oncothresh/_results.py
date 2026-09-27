@@ -259,6 +259,14 @@ class NNTResult(BaseModel):
     Infinite values (float("inf")) arise naturally when a metric is perfect:
     - nnt_positive is inf when PPV=0 (every flag is wrong, you will never find a true positive)
     - nnt_negative is inf when NPV=1 (every clearance is correct, no missed cases exist)
+
+    Undefined values (float("nan")) arise when the model made zero calls of the relevant
+    type, so the rate the metric is trying to describe has no population to be measured
+    over:
+    - nnt_negative is nan when n_predicted_negative=0 (the model cleared nobody, so
+      "safety of a clearance" is not a meaningful question for it at this threshold).
+      This is distinct from nnt_negative=inf (NPV=1), which means the model cleared
+      patients and was correct every time.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -277,7 +285,9 @@ class NNTResult(BaseModel):
         description=(
             "Number of model-negative calls needed to encounter one missed true positive. "
             "Equal to 1/(1-NPV). Higher is safer. "
-            "float('inf') when NPV=1 (model never misses a true positive)."
+            "float('inf') when NPV=1 (model never misses a true positive). "
+            "float('nan') when n_predicted_negative=0 (model cleared nobody, so the rate "
+            "is undefined rather than safe)."
         )
     )
     ppv: float = Field(
@@ -289,9 +299,24 @@ class NNTResult(BaseModel):
     n_positive: int = Field(description="Ground-truth positive sample count at this threshold.")
     n_negative: int = Field(description="Ground-truth negative sample count at this threshold.")
     n_total: int = Field(description="Total sample count (n_positive + n_negative).")
+    n_predicted_positive: int = Field(
+        description=(
+            "Number of samples the model called positive at this threshold (predicted "
+            "score >= threshold). When 0, nnt_positive is inf: no flags were made, so no "
+            "true positive can be found via this model's positive calls."
+        )
+    )
+    n_predicted_negative: int = Field(
+        description=(
+            "Number of samples the model called negative at this threshold (predicted "
+            "score < threshold). When 0, nnt_negative is nan: no clearances were made, "
+            "so 'safety of a negative call' is undefined rather than measurable."
+        )
+    )
 
     def __str__(self) -> str:
         # float("inf") is not printable as a clean number, so we substitute "∞".
+        # float("nan") prints fine as "nan" via the format spec, no substitution needed.
         def _fmt(v: float) -> str:
             return "∞" if v == float("inf") else f"{v:.2f}"
 
