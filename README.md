@@ -256,7 +256,7 @@ mcc                  0.728       0.532
 accuracy             0.878       0.788
 ```
 
-All evaluators must share the same test set (equal-length `y_true`) so the comparison is on a common denominator. Typical use cases: comparing UNI vs. CONCH features at the 20% TC cutoff, or comparing a new model version against a published baseline.
+All evaluators must share the same `y_true` (same cohort, same order) so the comparison is on a common denominator. Typical use cases: comparing UNI vs. CONCH features at the 20% TC cutoff, or comparing a new model version against a published baseline.
 
 ### 9. `bias_analysis()`: subgroup false negative/positive rates
 

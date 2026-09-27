@@ -825,10 +825,19 @@ def test_compare_models_empty_evaluators_raises():
 
 
 def test_compare_models_rejects_mismatched_cohorts():
-    """Evaluators scored on different-size test sets cannot be compared head-to-head."""
+    """Evaluators scored on different-size cohorts cannot be compared head-to-head."""
     ev_a = _perfect_evaluator(n=100)
     ev_b = _known_evaluator()  # n=6
-    with pytest.raises(ValueError, match="same test set"):
+    with pytest.raises(ValueError, match="same y_true"):
+        compare_models([ev_a, ev_b], threshold=0.5)
+
+
+def test_compare_models_rejects_equal_length_different_content_cohorts():
+    """Two evaluators with the same sample count but different patients must not compare
+    silently. Repro from issue #12: same length, entirely different y_true values."""
+    ev_a = ThresholdEvaluator(y_true=[0.1, 0.9, 0.2, 0.8], y_pred=[0.15, 0.85, 0.25, 0.75])
+    ev_b = ThresholdEvaluator(y_true=[0.9, 0.1, 0.8, 0.2], y_pred=[0.85, 0.15, 0.75, 0.25])
+    with pytest.raises(ValueError, match="same y_true"):
         compare_models([ev_a, ev_b], threshold=0.5)
 
 
