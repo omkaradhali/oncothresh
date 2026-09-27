@@ -183,7 +183,7 @@ Rules of thumb (in the same units as the scores):
 
 `decision_curve` requires you to name the clinical decision under analysis. Pass `clinical_threshold` (e.g. 0.20 for NGS-eligibility TC) and the disease label is fixed once as `y_true >= clinical_threshold`. Only the clinician's intervention threshold `pt` is swept. `y_pred` must be in `[0, 1]` and is interpreted as the model's predicted probability that `y_true >= clinical_threshold`. If your model emits a raw biomarker score, calibrate (Platt or isotonic) first.
 
-**Calibrating a raw biomarker score to a probability.** A continuous TC or Ki-67 score is not a probability. Passing it to `decision_curve` directly raises `ValueError`. Convert it with scikit-learn's `CalibratedClassifierCV` (or `IsotonicRegression`) against the clinical-threshold label:
+**Calibrating a raw biomarker score to a probability.** A continuous TC or Ki-67 score is not a probability, even though `decision_curve` cannot always tell the difference. It only rejects `y_pred` values outside `[0, 1]`, so an out-of-range score (e.g. a raw TMB count in mut/Mb) raises `ValueError`, but TC and Ki-67 are already fractions in `[0, 1]` by construction, so an uncalibrated raw score for either one passes the check silently and produces a numerically valid but clinically meaningless curve. The range check is a basic sanity guard, not a calibration check, and calibration correctness is the caller's responsibility. Convert your score to a genuine probability with scikit-learn's `CalibratedClassifierCV` (or `IsotonicRegression`) against the clinical-threshold label:
 
 ```python
 from sklearn.calibration import CalibratedClassifierCV

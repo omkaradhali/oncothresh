@@ -435,6 +435,29 @@ def test_decision_curve_rejects_negative_pt():
         _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[-0.1, 0.5])
 
 
+def test_decision_curve_rejects_empty_thresholds():
+    """An empty sweep must raise here, not downstream as an IndexError from __str__."""
+    with pytest.raises(ValueError, match="must not be empty"):
+        _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[])
+
+
+def test_decision_curve_rejects_nan_in_thresholds():
+    """NaN silently passes pts.min()/pts.max() range checks (nan < 0 and nan >= 1 are both
+    False), so it needs its own explicit finite check before the range check runs."""
+    with pytest.raises(ValueError, match="must be finite"):
+        _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.1, float("nan"), 0.3])
+
+
+def test_decision_curve_rejects_inf_in_thresholds():
+    with pytest.raises(ValueError, match="must be finite"):
+        _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.1, float("inf")])
+
+
+def test_decision_curve_rejects_negative_inf_in_thresholds():
+    with pytest.raises(ValueError, match="must be finite"):
+        _dca_evaluator().decision_curve(clinical_threshold=0.5, thresholds=[0.1, float("-inf")])
+
+
 def test_decision_curve_perfect_model_beats_treat_all():
     """A perfectly-calibrated model should have NB >= treat-all at every pt."""
     result = _dca_evaluator().decision_curve(
