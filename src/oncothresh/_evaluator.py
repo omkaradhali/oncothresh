@@ -1020,9 +1020,9 @@ def compare_models(
     ----------
     evaluators : list[ThresholdEvaluator]
         Two or more ThresholdEvaluator instances, one per model to compare. All must be
-        scored on the same test set, so they share an equal-length y_true (e.g. different
-        model architectures evaluated on the same cohort: pass the same y_true to each but
-        a different y_pred).
+        scored on the same cohort, in the same order: every evaluator's y_true must be
+        identical (e.g. different model architectures evaluated on the same patients:
+        pass the same y_true to each but a different y_pred).
     threshold : float
         The clinical cutoff at which all models are evaluated (e.g. 0.20 for NGS eligibility).
     model_names : list[str] | None
@@ -1039,8 +1039,8 @@ def compare_models(
     ------
     ValueError
         If fewer than 2 evaluators are provided, if the evaluators do not all share the
-        same number of samples, or if model_names is given but its length does not match
-        the number of evaluators.
+        same y_true (same cohort, same order), or if model_names is given but its length
+        does not match the number of evaluators.
 
     Examples
     --------
@@ -1058,13 +1058,17 @@ def compare_models(
             f"number of evaluators ({len(evaluators)})"
         )
     # A head-to-head table is only meaningful when every model is scored on the same
-    # test set. Differing sample counts mean different denominators and prevalences, so
-    # the comparison would be misleading. Require equal-length cohorts.
-    n_samples = len(evaluators[0].y_true)
-    if any(len(ev.y_true) != n_samples for ev in evaluators[1:]):
+    # cohort in the same order. Checking length alone lets two evaluators built from
+    # entirely different patients (that happen to share a sample count) compare silently,
+    # producing a table that looks like a valid same-cohort comparison but isn't. Compare
+    # y_true contents, not just length: y_true is the ground-truth label shared by every
+    # model under comparison, while y_pred is expected to differ (that's the whole point
+    # of comparing models).
+    reference_y_true = evaluators[0].y_true
+    if any(not np.array_equal(ev.y_true, reference_y_true) for ev in evaluators[1:]):
         raise ValueError(
-            "compare_models expects all evaluators to share the same test set "
-            "(equal-length y_true), got differing sample counts"
+            "compare_models expects all evaluators to share the same y_true "
+            "(same cohort, same order), got evaluators with differing ground truth"
         )
 
     names = (
