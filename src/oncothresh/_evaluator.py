@@ -313,6 +313,13 @@ class ThresholdEvaluator:
             - ``nnt_negative = inf`` when NPV = 1: the model never misses a true positive,
               so there are no missed cases among cleared patients.
 
+        ``nnt_negative`` is ``nan`` (not a number, not 1.0) when the model made zero
+        negative calls at this threshold (``n_predicted_negative == 0``, e.g. it predicted
+        positive for every sample). In that case "how many clearances hide a missed case"
+        has no population to be measured over: there is no cleared cohort at all, so the
+        rate is undefined rather than 1.0 (which would misread as "every clearance is a
+        miss") or safe. Check ``n_predicted_negative`` on the result to detect this case.
+
         This method calls ``evaluate()`` internally. No extra computation is performed
         beyond what ``evaluate()`` already does.
 
@@ -335,17 +342,28 @@ class ThresholdEvaluator:
         >>> print(result.nnt_negative)  # how many clearances per missed case
         """
         result = self.evaluate(threshold)
+        _, y_pred_bin = self._binarize(threshold)
+        n_predicted_positive = int(y_pred_bin.sum())
+        n_predicted_negative = int(len(y_pred_bin) - n_predicted_positive)
 
         # PPV = 0 means every flag is a false alarm. 1/0 is mathematically undefined, but
         # the clinical interpretation is clear: you will never find a true positive by
-        # acting on this model's positive calls. inf is the correct answer.
+        # acting on this model's positive calls. inf is the correct answer. This also
+        # covers n_predicted_positive == 0 (no flags at all): PPV is 0.0 there too via
+        # _safe_divide's 0/0 convention, so the same inf reasoning applies.
         nnt_positive = (1.0 / result.ppv) if result.ppv > 0 else float("inf")
 
-        # 1 − NPV is the rate of missed cases among cleared patients.
-        # NPV = 1 means no cleared patient is a missed case: 1/(1−1) = 1/0 → inf,
-        # meaning you could clear infinitely many patients without missing a single true positive.
-        false_omission_rate = 1.0 - result.npv
-        nnt_negative = (1.0 / false_omission_rate) if false_omission_rate > 0 else float("inf")
+        # 1 − NPV is the rate of missed cases among cleared patients. That rate only means
+        # something if the model actually cleared anyone. When n_predicted_negative == 0,
+        # there is no cleared cohort to sample a missed case from, so nnt_negative is
+        # undefined (nan), not 1.0 (misread as "every clearance is a miss") and not "safe".
+        if n_predicted_negative == 0:
+            nnt_negative = float("nan")
+        else:
+            # NPV = 1 means no cleared patient is a missed case: 1/(1−1) = 1/0 → inf,
+            # meaning you could clear infinitely many patients without missing a case.
+            false_omission_rate = 1.0 - result.npv
+            nnt_negative = (1.0 / false_omission_rate) if false_omission_rate > 0 else float("inf")
 
         return NNTResult(
             threshold=threshold,
@@ -356,6 +374,8 @@ class ThresholdEvaluator:
             n_positive=result.n_positive,
             n_negative=result.n_negative,
             n_total=result.n_total,
+            n_predicted_positive=n_predicted_positive,
+            n_predicted_negative=n_predicted_negative,
         )
 
     def threshold_sensitivity(
