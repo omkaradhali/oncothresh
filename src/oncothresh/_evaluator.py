@@ -696,9 +696,10 @@ class ThresholdEvaluator:
         Raises
         ------
         ValueError
-            If ``clinical_threshold`` is not in [0, 1], if any swept ``pt`` is outside
-            [0, 1), or if ``y_pred`` contains values outside [0, 1] (it must be a
-            probability for DCA to be meaningful).
+            If ``clinical_threshold`` is not in [0, 1], if ``thresholds`` is empty or
+            contains NaN/inf, if any swept ``pt`` is outside [0, 1), or if ``y_pred``
+            contains values outside [0, 1] (it must be a probability for DCA to be
+            meaningful).
 
         References
         ----------
@@ -724,10 +725,17 @@ class ThresholdEvaluator:
             thresholds = np.linspace(0.01, 0.99, 99)
 
         pts = np.asarray(thresholds, dtype=float)
+        if pts.size == 0:
+            raise ValueError("decision_curve thresholds must not be empty")
+        # NaN must be rejected before the range check below: pts.min()/pts.max() propagate
+        # NaN such that `nan < 0.0` and `nan >= 1.0` both evaluate False, so a NaN pt would
+        # otherwise pass the range check silently and pollute net_benefit_model with NaN.
+        if not np.all(np.isfinite(pts)):
+            raise ValueError("decision_curve thresholds must be finite, no NaN or inf")
         # pt is a probability threshold, so it must lie in [0, 1). pt=1.0 and above make the
         # harm weight pt/(1-pt) diverge, which has no clinical meaning. Reject loudly rather
         # than emit NaN, matching the reference dcurves behaviour.
-        if pts.size and (pts.min() < 0.0 or pts.max() >= 1.0):
+        if pts.min() < 0.0 or pts.max() >= 1.0:
             raise ValueError(
                 "decision_curve thresholds (pt) must lie in [0, 1). pt=1.0 and above are "
                 f"undefined because pt/(1-pt) diverges. Observed range: "
