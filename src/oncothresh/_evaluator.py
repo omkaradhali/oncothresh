@@ -108,7 +108,13 @@ class ThresholdEvaluator:
         Returns
         -------
         ThresholdResult
+
+        Raises
+        ------
+        ValueError
+            If threshold is not finite (NaN or inf).
         """
+        self._validate_threshold(threshold)
 
         # Classification metrics require binary labels. The threshold converts continuous
         # scores to 0/1.
@@ -274,7 +280,8 @@ class ThresholdEvaluator:
         Raises
         ------
         ValueError
-            If thresholds is an empty list.
+            If thresholds is an empty list, or if any threshold is not finite
+            (via evaluate()).
         """
         if not thresholds:
             raise ValueError("thresholds must not be empty")
@@ -326,6 +333,11 @@ class ThresholdEvaluator:
         NNTResult
             Contains nnt_positive, nnt_negative, and the underlying PPV/NPV values that
             produced them, along with sample counts for context.
+
+        Raises
+        ------
+        ValueError
+            If threshold is not finite (via evaluate()).
 
         Examples
         --------
@@ -421,8 +433,9 @@ class ThresholdEvaluator:
         Raises
         ------
         ValueError
-            If delta <= 0 or step <= 0.
+            If threshold is not finite, or if delta <= 0 or step <= 0.
         """
+        self._validate_threshold(threshold)
         if delta <= 0:
             raise ValueError(f"delta must be positive, got {delta}")
         if step <= 0:
@@ -546,8 +559,9 @@ class ThresholdEvaluator:
         Raises
         ------
         ValueError
-            If window <= 0 or n_bins < 1.
+            If threshold is not finite, or if window <= 0 or n_bins < 1.
         """
+        self._validate_threshold(threshold)
         if window <= 0:
             raise ValueError(f"window must be positive, got {window}")
         if n_bins < 1:
@@ -851,7 +865,8 @@ class ThresholdEvaluator:
             If metadata is empty, if a column is a bare string instead of a sequence of
             per-sample labels, if a column is not 1-D or its length does not match the
             number of samples in y_true, if a column contains NaN, if a column's labels
-            are not all hashable, or if min_group_size is less than 1.
+            are not all hashable, if min_group_size is less than 1, or if threshold is
+            not finite (via evaluate()).
 
         Examples
         --------
@@ -1010,6 +1025,19 @@ class ThresholdEvaluator:
     def _safe_divide(numerator: float, denominator: float) -> float:
         """Return 0.0 when denominator is zero rather than raising."""
         return float(numerator / denominator) if denominator != 0 else 0.0
+
+    @staticmethod
+    def _validate_threshold(threshold: float, param_name: str = "threshold") -> None:
+        """
+        Reject a non-finite threshold before it can silently corrupt a result.
+
+        `x >= nan` is False for every x, so a NaN threshold collapses the confusion
+        matrix to "everything is negative" without raising. inf/-inf produce similarly
+        degenerate but unflagged results. This mirrors the constructor's existing
+        "a corrupt value must fail loudly" policy for y_true/y_pred.
+        """
+        if not math.isfinite(threshold):
+            raise ValueError(f"{param_name} must be finite, got {threshold}")
 
 
 def compare_models(

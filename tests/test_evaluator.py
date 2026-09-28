@@ -182,6 +182,31 @@ def test_result_type():
     assert isinstance(result, ThresholdResult)
 
 
+# evaluate(): non-finite threshold
+#
+# A NaN threshold does not raise on its own: `x >= nan` is False for every x, so the
+# confusion matrix silently collapses to "everything negative" instead of failing loudly.
+# inf/-inf are similarly silent (everything negative/positive respectively).
+
+
+def test_evaluate_rejects_nan_threshold():
+    ev = _known_evaluator()
+    with pytest.raises(ValueError, match="threshold must be finite"):
+        ev.evaluate(threshold=float("nan"))
+
+
+def test_evaluate_rejects_positive_inf_threshold():
+    ev = _known_evaluator()
+    with pytest.raises(ValueError, match="threshold must be finite"):
+        ev.evaluate(threshold=float("inf"))
+
+
+def test_evaluate_rejects_negative_inf_threshold():
+    ev = _known_evaluator()
+    with pytest.raises(ValueError, match="threshold must be finite"):
+        ev.evaluate(threshold=float("-inf"))
+
+
 # bootstrap_ci()
 def test_bootstrap_result_type():
     ev = _perfect_evaluator()
@@ -294,6 +319,13 @@ def test_multi_threshold_empty_raises():
     ev = _perfect_evaluator()
     with pytest.raises(ValueError, match="empty"):
         ev.multi_threshold_report(thresholds=[])
+
+
+def test_multi_threshold_report_rejects_nan_threshold():
+    """Inherited from evaluate(), confirmed directly rather than only via evaluate()'s test."""
+    ev = _perfect_evaluator()
+    with pytest.raises(ValueError, match="threshold must be finite"):
+        ev.multi_threshold_report(thresholds=[0.20, float("nan")])
 
 
 # decision_curve()
@@ -561,6 +593,12 @@ def test_nnt_result_is_frozen():
         result.nnt_positive = 2.0  # type: ignore[misc]
 
 
+def test_nnt_rejects_nan_threshold():
+    """Inherited from evaluate(), confirmed directly rather than only via evaluate()'s test."""
+    with pytest.raises(ValueError, match="threshold must be finite"):
+        _known_evaluator().nnt(threshold=float("nan"))
+
+
 def test_nnt_str_handles_inf():
     """__str__ must render inf as a clean symbol, not 'inf'."""
     ev = ThresholdEvaluator(y_true=[0.1, 0.2, 0.8, 0.9], y_pred=[0.1, 0.2, 0.8, 0.9])
@@ -641,6 +679,14 @@ def test_threshold_sensitivity_rejects_invalid_params():
         ev.threshold_sensitivity(threshold=0.5, delta=0.05, step=0.0)
 
 
+def test_threshold_sensitivity_rejects_nan_threshold():
+    """threshold itself must be validated before the delta/step arithmetic runs on it,
+    so a NaN threshold fails with a clear message rather than a confusing linspace/argmin
+    error downstream."""
+    with pytest.raises(ValueError, match="threshold must be finite"):
+        _known_evaluator().threshold_sensitivity(threshold=float("nan"))
+
+
 def test_threshold_sensitivity_result_is_frozen():
     result = _known_evaluator().threshold_sensitivity(threshold=0.5)
     with pytest.raises(ValidationError):
@@ -717,6 +763,12 @@ def test_boundary_calibration_rejects_invalid_params():
         ev.boundary_calibration(threshold=0.20, window=0.0)
     with pytest.raises(ValueError, match="n_bins"):
         ev.boundary_calibration(threshold=0.20, n_bins=0)
+
+
+def test_boundary_calibration_rejects_nan_threshold():
+    """threshold itself must be validated before the lo/hi arithmetic runs on it."""
+    with pytest.raises(ValueError, match="threshold must be finite"):
+        _boundary_eval_perfect().boundary_calibration(threshold=float("nan"))
 
 
 def test_boundary_calibration_result_is_frozen():
@@ -978,6 +1030,12 @@ def test_bias_analysis_mismatched_column_length_raises():
 def test_bias_analysis_rejects_non_positive_min_group_size():
     with pytest.raises(ValueError, match="min_group_size"):
         _known_evaluator().bias_analysis(_scanner_metadata(), threshold=0.5, min_group_size=0)
+
+
+def test_bias_analysis_rejects_nan_threshold():
+    """Inherited from evaluate(), confirmed directly rather than only via evaluate()'s test."""
+    with pytest.raises(ValueError, match="threshold must be finite"):
+        _known_evaluator().bias_analysis(_scanner_metadata(), threshold=float("nan"))
 
 
 def test_bias_analysis_stores_threshold_and_min_group_size():
